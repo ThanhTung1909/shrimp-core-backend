@@ -33,3 +33,31 @@ npm install
 ```Bash
 npm run start:dev
 ```
+## Project Directory Structure
+shrimp-core-backend/
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+├── src/
+│   ├── common/
+│   │   ├── decorators/
+│   │   ├── filters/
+│   │   ├── guards/
+│   │   └── interceptors/
+│   ├── modules/
+│   │   ├── alerts/
+│   │   ├── amqp/
+│   │   ├── auth/
+│   │   ├── devices/
+│   │   ├── mqtt/
+│   │   ├── notifications/
+│   │   ├── orchestrator/
+│   │   ├── ponds/
+│   │   ├── predictions/
+│   │   ├── telemetry/
+│   │   └── users/
+│   ├── app.module.ts
+│   └── main.ts
+├── .env
+├── package.json
+└── README.md
