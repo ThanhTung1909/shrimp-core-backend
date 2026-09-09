@@ -4,7 +4,10 @@ import {
   PrimaryColumn,
   Column,
   Index,
+  ManyToOne,
+  JoinColumn,
 } from 'typeorm';
+import { Device } from '../../devices/entities/device.entity.js';
 
 @Entity('telemetry_data')
 @Index('idx_telemetry_device_time', ['deviceId', 'recordedAt'])
@@ -43,4 +46,11 @@ export class TelemetryData {
 
   @Column({ type: 'boolean', default: false, name: 'is_buffered' })
   isBuffered: boolean;
+
+  @ManyToOne(() => Device, (device) => device.telemetries, {
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'device_id' })
+  device: Device;
 }
+

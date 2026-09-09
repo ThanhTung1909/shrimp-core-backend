@@ -3,11 +3,19 @@ import { AppModule } from '../src/app.module.js';
 import { TelemetryService } from '../src/modules/telemetry/telemetry.service.js';
 import { DataSource } from 'typeorm';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { User } from '../src/modules/users/entities/user.entity.js';
+import { Pond } from '../src/modules/ponds/entities/pond.entity.js';
+import { Device } from '../src/modules/devices/entities/device.entity.js';
+import { Role } from '../src/common/enums/role.enum.js';
+import { PondStatus } from '../src/common/enums/pond-status.enum.js';
+import { DeviceStatus } from '../src/common/enums/device-status.enum.js';
 
 describe('Telemetry & TimescaleDB Integration Test', () => {
   let moduleRef: TestingModule;
   let telemetryService: TelemetryService;
   let dataSource: DataSource;
+  let testDeviceId: string;
+  let testUserId: string;
 
   beforeAll(async () => {
     moduleRef = await Test.createTestingModule({
@@ -16,9 +24,48 @@ describe('Telemetry & TimescaleDB Integration Test', () => {
 
     telemetryService = moduleRef.get(TelemetryService);
     dataSource = moduleRef.get(DataSource);
+
+    // Tạo thiết bị mẫu hợp lệ để thỏa mãn ràng buộc khóa ngoại Device -> TelemetryData
+    const userRepo = dataSource.getRepository(User);
+    const pondRepo = dataSource.getRepository(Pond);
+    const deviceRepo = dataSource.getRepository(Device);
+
+    const user = await userRepo.save(
+      userRepo.create({
+        fullName: 'Test Telemetry User',
+        phoneNumber: `091${Date.now().toString().slice(-7)}`,
+        passwordHash: 'hashed_password',
+        role: Role.FARMER,
+      }),
+    );
+    testUserId = user.userId;
+
+    const pond = await pondRepo.save(
+      pondRepo.create({
+        userId: user.userId,
+        pondName: 'Ao Test Telemetry',
+        areaM2: 1000,
+        depthM: 1.5,
+        shrimpDensity: 100,
+        status: PondStatus.ACTIVE,
+      }),
+    );
+
+    const device = await deviceRepo.save(
+      deviceRepo.create({
+        pondId: pond.pondId,
+        deviceName: 'Device Test Telemetry',
+        macAddress: `00:11:22:${Math.floor(Math.random() * 89 + 10)}:${Math.floor(Math.random() * 89 + 10)}:${Math.floor(Math.random() * 89 + 10)}`,
+        status: DeviceStatus.ONLINE,
+      }),
+    );
+    testDeviceId = device.deviceId;
   });
 
   afterAll(async () => {
+    if (dataSource && testUserId) {
+      await dataSource.getRepository(User).delete(testUserId);
+    }
     if (moduleRef) {
       await moduleRef.close();
     }
@@ -43,7 +90,6 @@ describe('Telemetry & TimescaleDB Integration Test', () => {
   });
 
   it('phải ghi và truy vấn dữ liệu cảm biến chuỗi thời gian thành công', async () => {
-    const testDeviceId = 'a0000000-0000-0000-0000-000000000001';
     const newRecord = await telemetryService.recordTelemetry({
       deviceId: testDeviceId,
       temperature: 29.2,

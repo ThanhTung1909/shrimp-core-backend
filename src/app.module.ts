@@ -2,6 +2,9 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TelemetryModule } from './modules/telemetry/telemetry.module.js';
+import { UsersModule } from './modules/users/users.module.js';
+import { PondsModule } from './modules/ponds/ponds.module.js';
+import { DevicesModule } from './modules/devices/devices.module.js';
 
 @Module({
   imports: [
@@ -23,6 +26,11 @@ import { TelemetryModule } from './modules/telemetry/telemetry.module.js';
         synchronize: true,
       }),
     }),
+
+    // Các modules thực thể cốt lõi
+    UsersModule,
+    PondsModule,
+    DevicesModule,
 
     // Module quản lý dữ liệu cảm biến chuỗi thời gian
     TelemetryModule,
