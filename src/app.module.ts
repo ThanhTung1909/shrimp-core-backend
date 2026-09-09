@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { TelemetryModule } from './modules/telemetry/telemetry.module.js';
 
 @Module({
   imports: [
@@ -22,6 +23,9 @@ import { TypeOrmModule } from '@nestjs/typeorm';
         synchronize: true,
       }),
     }),
+
+    // Module quản lý dữ liệu cảm biến chuỗi thời gian
+    TelemetryModule,
   ],
   controllers: [],
   providers: [],
