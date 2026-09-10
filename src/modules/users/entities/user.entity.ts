@@ -7,6 +7,8 @@ import {
 } from 'typeorm';
 import { Role } from '../../../common/enums/role.enum.js';
 import { Pond } from '../../ponds/entities/pond.entity.js';
+import { Alert } from '../../alerts/entities/alert.entity.js';
+import { ManualTestLog } from '../../ponds/entities/manual-test-log.entity.js';
 
 @Entity('users')
 export class User {
@@ -38,5 +40,12 @@ export class User {
 
   @OneToMany(() => Pond, (pond) => pond.user)
   ponds: Relation<Pond>[];
+
+  @OneToMany(() => Alert, (alert) => alert.resolvedBy)
+  resolvedAlerts: Relation<Alert>[];
+
+  @OneToMany(() => ManualTestLog, (log) => log.testedBy)
+  testedLogs: Relation<ManualTestLog>[];
 }
+
 

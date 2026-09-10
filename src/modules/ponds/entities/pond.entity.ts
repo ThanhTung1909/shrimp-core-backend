@@ -12,6 +12,9 @@ import { PondStatus } from '../../../common/enums/pond-status.enum.js';
 import { User } from '../../users/entities/user.entity.js';
 import { Device } from '../../devices/entities/device.entity.js';
 import { ThresholdConfig } from './threshold-config.entity.js';
+import { Alert } from '../../alerts/entities/alert.entity.js';
+import { AiPrediction } from '../../predictions/entities/ai-prediction.entity.js';
+import { ManualTestLog } from './manual-test-log.entity.js';
 
 @Entity('pond')
 export class Pond {
@@ -57,5 +60,15 @@ export class Pond {
 
   @OneToMany(() => ThresholdConfig, (config) => config.pond)
   thresholdConfigs: Relation<ThresholdConfig>[];
+
+  @OneToMany(() => Alert, (alert) => alert.pond)
+  alerts: Relation<Alert>[];
+
+  @OneToMany(() => AiPrediction, (pred) => pred.pond)
+  predictions: Relation<AiPrediction>[];
+
+  @OneToMany(() => ManualTestLog, (log) => log.pond)
+  manualLogs: Relation<ManualTestLog>[];
 }
+
 

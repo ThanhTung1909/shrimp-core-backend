@@ -5,6 +5,8 @@ import { TelemetryModule } from './modules/telemetry/telemetry.module.js';
 import { UsersModule } from './modules/users/users.module.js';
 import { PondsModule } from './modules/ponds/ponds.module.js';
 import { DevicesModule } from './modules/devices/devices.module.js';
+import { AlertsModule } from './modules/alerts/alerts.module.js';
+import { PredictionsModule } from './modules/predictions/predictions.module.js';
 
 @Module({
   imports: [
@@ -31,6 +33,8 @@ import { DevicesModule } from './modules/devices/devices.module.js';
     UsersModule,
     PondsModule,
     DevicesModule,
+    AlertsModule,
+    PredictionsModule,
 
     // Module quản lý dữ liệu cảm biến chuỗi thời gian
     TelemetryModule,
