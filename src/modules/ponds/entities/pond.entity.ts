@@ -6,6 +6,7 @@ import {
   ManyToOne,
   OneToMany,
   JoinColumn,
+  type Relation,
 } from 'typeorm';
 import { PondStatus } from '../../../common/enums/pond-status.enum.js';
 import { User } from '../../users/entities/user.entity.js';
@@ -49,11 +50,12 @@ export class Pond {
 
   @ManyToOne(() => User, (user) => user.ponds, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
-  user: User;
+  user: Relation<User>;
 
   @OneToMany(() => Device, (device) => device.pond)
-  devices: Device[];
+  devices: Relation<Device>[];
 
   @OneToMany(() => ThresholdConfig, (config) => config.pond)
-  thresholdConfigs: ThresholdConfig[];
+  thresholdConfigs: Relation<ThresholdConfig>[];
 }
+

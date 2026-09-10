@@ -5,6 +5,7 @@ import {
   ManyToOne,
   JoinColumn,
   Check,
+  type Relation,
 } from 'typeorm';
 import { Pond } from './pond.entity.js';
 
@@ -33,5 +34,6 @@ export class ThresholdConfig {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'pond_id' })
-  pond: Pond;
+  pond: Relation<Pond>;
 }
+

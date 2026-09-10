@@ -3,6 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   OneToMany,
+  type Relation,
 } from 'typeorm';
 import { Role } from '../../../common/enums/role.enum.js';
 import { Pond } from '../../ponds/entities/pond.entity.js';
@@ -36,5 +37,6 @@ export class User {
   isActive: boolean;
 
   @OneToMany(() => Pond, (pond) => pond.user)
-  ponds: Pond[];
+  ponds: Relation<Pond>[];
 }
+

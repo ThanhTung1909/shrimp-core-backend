@@ -6,6 +6,7 @@ import {
   Index,
   ManyToOne,
   JoinColumn,
+  type Relation,
 } from 'typeorm';
 import { Device } from '../../devices/entities/device.entity.js';
 
@@ -51,6 +52,7 @@ export class TelemetryData {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'device_id' })
-  device: Device;
+  device: Relation<Device>;
 }
+
 
