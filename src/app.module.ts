@@ -7,6 +7,7 @@ import { PondsModule } from './modules/ponds/ponds.module.js';
 import { DevicesModule } from './modules/devices/devices.module.js';
 import { AlertsModule } from './modules/alerts/alerts.module.js';
 import { PredictionsModule } from './modules/predictions/predictions.module.js';
+import { AuthModule } from './modules/auth/auth.module.js';
 
 @Module({
   imports: [
@@ -29,6 +30,9 @@ import { PredictionsModule } from './modules/predictions/predictions.module.js';
       }),
     }),
 
+    //Module xác thực và phân quyền
+    AuthModule,
+    
     // Các modules thực thể cốt lõi
     UsersModule,
     PondsModule,

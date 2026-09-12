@@ -38,6 +38,14 @@ export class User {
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
+  // version của token, mục đích là vô hiệu hóa các token cũ
+  @Column({
+    name: 'token_version',
+    type: 'int',
+    default: 0,
+  })
+  tokenVersion: number;
+
   @OneToMany(() => Pond, (pond) => pond.user)
   ponds: Relation<Pond>[];
 
