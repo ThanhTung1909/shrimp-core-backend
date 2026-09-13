@@ -6,6 +6,9 @@ import { Device } from '../devices/entities/device.entity.js';
 import { DeviceStatus } from '../../common/enums/device-status.enum.js';
 import { CreateTelemetryDto } from './dto/create-telemetry.dto.js';
 import { QueryTelemetryDto } from './dto/query-telemetry.dto.js';
+import { Alert } from '../alerts/entities/alert.entity.js';
+import { AlertLevel } from '../../common/enums/alert-level.enum.js';
+import { AlertStatus } from '../../common/enums/alert-status.enum.js';
 
 @Injectable()
 export class TelemetryService implements OnModuleInit {
@@ -16,6 +19,8 @@ export class TelemetryService implements OnModuleInit {
     private readonly telemetryRepo: Repository<TelemetryData>,
     @InjectRepository(Device)
     private readonly deviceRepo: Repository<Device>,
+    @InjectRepository(Alert)
+    private readonly alertRepo: Repository<Alert>,
     private readonly dataSource: DataSource,
   ) { }
 
@@ -155,5 +160,63 @@ export class TelemetryService implements OnModuleInit {
     });
 
     return { data, total };
+  }
+
+  async updateDeviceStatus(deviceId: string, status: DeviceStatus): Promise<Device | null> {
+    const device = await this.deviceRepo.findOne({ where: { deviceId } });
+    if (!device) {
+      return null;
+    }
+
+    device.status = status;
+    if (status === DeviceStatus.ONLINE) {
+      device.lastActiveAt = new Date();
+    }
+    const updatedDevice = await this.deviceRepo.save(device);
+
+    if (status === DeviceStatus.OFFLINE) {
+      const activeAlert = await this.alertRepo.findOne({
+        where: {
+          pondId: device.pondId,
+          metricName: 'device_status',
+          status: AlertStatus.ACTIVE,
+          alertLevel: AlertLevel.CRITICAL,
+        },
+        order: { createdAt: 'DESC' },
+      });
+
+      if (!activeAlert) {
+        const newAlert = this.alertRepo.create({
+          pondId: device.pondId,
+          deviceId: device.deviceId,
+          metricName: 'device_status',
+          triggeredValue: 0,
+          alertLevel: AlertLevel.CRITICAL,
+          status: AlertStatus.ACTIVE,
+          message: `Thiết bị ${device.deviceName || device.deviceId} mất kết nối mạng đột ngột hoặc quá hạn phản hồi`,
+        });
+        await this.alertRepo.save(newAlert);
+      }
+    }
+
+    return updatedDevice;
+  }
+
+  async checkAndMarkOfflineDevices(timeoutMinutes: number = 15): Promise<number> {
+    const thresholdDate = new Date(Date.now() - timeoutMinutes * 60 * 1000);
+    const offlineDevices = await this.deviceRepo.find({
+      where: {
+        status: DeviceStatus.ONLINE,
+        lastActiveAt: LessThanOrEqual(thresholdDate),
+      },
+    });
+
+    let updatedCount = 0;
+    for (const device of offlineDevices) {
+      await this.updateDeviceStatus(device.deviceId, DeviceStatus.OFFLINE);
+      updatedCount++;
+    }
+
+    return updatedCount;
   }
 }

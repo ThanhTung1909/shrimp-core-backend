@@ -12,6 +12,7 @@ import { AlertLevel } from '../../../common/enums/alert-level.enum.js';
 import { AlertStatus } from '../../../common/enums/alert-status.enum.js';
 import { Pond } from '../../ponds/entities/pond.entity.js';
 import { User } from '../../users/entities/user.entity.js';
+import { Device } from '../../devices/entities/device.entity.js';
 import { AiRecommendation } from './ai-recommendation.entity.js';
 
 /**
@@ -25,6 +26,12 @@ export class Alert {
 
   @Column({ type: 'uuid', name: 'pond_id' })
   pondId: string;
+
+  @Column({ type: 'uuid', name: 'device_id', nullable: true })
+  deviceId: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  message: string | null;
 
   // Người xử lý sự cố (có thể null khi sự cố mới phát sinh chưa ai nhận)
   @Column({ type: 'uuid', name: 'resolved_by', nullable: true })
@@ -90,4 +97,11 @@ export class Alert {
   // 3. Quan hệ 1 - 1 với AiRecommendation: 1 Alert được nối với 1 lời khuyên AI
   @OneToOne(() => AiRecommendation, (rec) => rec.alert)
   recommendation: Relation<AiRecommendation>;
+
+  @ManyToOne(() => Device, (device) => device.alerts, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
+  @JoinColumn({ name: 'device_id' })
+  device: Relation<Device> | null;
 }

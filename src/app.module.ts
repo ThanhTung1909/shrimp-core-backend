@@ -8,10 +8,13 @@ import { DevicesModule } from './modules/devices/devices.module.js';
 import { AlertsModule } from './modules/alerts/alerts.module.js';
 import { PredictionsModule } from './modules/predictions/predictions.module.js';
 
+import { ScheduleModule } from '@nestjs/schedule';
+
 @Module({
   imports: [
     // Load biến môi trường toàn cục
     ConfigModule.forRoot({ isGlobal: true }),
+    ScheduleModule.forRoot(),
 
     // Kết nối CSDL TimescaleDB
     TypeOrmModule.forRootAsync({

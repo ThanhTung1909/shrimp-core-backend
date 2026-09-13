@@ -5,14 +5,16 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { TelemetryService } from './telemetry.service.js';
 import { CreateTelemetryDto } from './dto/create-telemetry.dto.js';
+import { DeviceStatusMqttDto } from './dto/device-status-mqtt.dto.js';
 
 @Injectable()
 export class TelemetryMqttService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TelemetryMqttService.name);
   private client: mqtt.MqttClient;
 
-  // Wildcard Topic quy chuẩn: telemetry/devices/<deviceId>/data
+  // Wildcard Topic quy chuẩn: telemetry/devices/<deviceId>/data và telemetry/devices/<deviceId>/status
   private readonly topicPattern = 'telemetry/devices/+/data';
+  private readonly statusTopicPattern = 'telemetry/devices/+/status';
 
   constructor(
     private readonly configService: ConfigService,
@@ -60,14 +62,14 @@ export class TelemetryMqttService implements OnModuleInit, OnModuleDestroy {
   }
 
   private subscribeToTelemetryTopic() {
-    this.client.subscribe(this.topicPattern, { qos: 1 }, (err) => {
+    this.client.subscribe([this.topicPattern, this.statusTopicPattern], { qos: 1 }, (err) => {
       if (err) {
         this.logger.error(
-          `[MQTT] Không thể đăng ký (subscribe) topic ${this.topicPattern}: ${err.message}`,
+          `[MQTT] Không thể đăng ký (subscribe) topics: ${err.message}`,
         );
       } else {
         this.logger.log(
-          `[MQTT] Đã đăng ký thành công topic lắng nghe: ${this.topicPattern}`,
+          `[MQTT] Đã đăng ký thành công topic lắng nghe: ${this.topicPattern}, ${this.statusTopicPattern}`,
         );
       }
     });
@@ -84,21 +86,48 @@ export class TelemetryMqttService implements OnModuleInit, OnModuleDestroy {
       const payloadString = message.toString('utf-8');
       const parsedJson = JSON.parse(payloadString);
 
-      // Validate định dạng payload qua DTO
-      const dto = plainToInstance(CreateTelemetryDto, parsedJson);
-      const errors = await validate(dto);
+      const topicRegex = /^telemetry\/devices\/([a-zA-Z0-9\-]+)\/(data|status)$/;
+      const match = topic.match(topicRegex);
 
-      if (errors.length > 0) {
-        const errorMessages = errors
-          .map((err) => Object.values(err.constraints || {}).join(', '))
-          .join('; ');
-        this.logger.warn(
-          `[MQTT Payload Invalid] Gói tin từ topic ${topic} không hợp lệ: ${errorMessages}`,
-        );
+      if (!match) {
+        this.logger.warn(`[MQTT] Topic không đúng định dạng: ${topic}`);
         return;
       }
 
-      await this.telemetryService.processTelemetryPayload(dto);
+      const deviceId = match[1];
+      const type = match[2]; // 'data' hoặc 'status'
+
+      if (type === 'data') {
+        const dto = plainToInstance(CreateTelemetryDto, parsedJson);
+        const errors = await validate(dto);
+
+        if (errors.length > 0) {
+          const errorMessages = errors
+            .map((err) => Object.values(err.constraints || {}).join(', '))
+            .join('; ');
+          this.logger.warn(
+            `[MQTT Payload Invalid] Gói tin data từ topic ${topic} không hợp lệ: ${errorMessages}`,
+          );
+          return;
+        }
+
+        await this.telemetryService.processTelemetryPayload(dto);
+      } else if (type === 'status') {
+        const dto = plainToInstance(DeviceStatusMqttDto, parsedJson);
+        const errors = await validate(dto);
+
+        if (errors.length > 0) {
+          const errorMessages = errors
+            .map((err) => Object.values(err.constraints || {}).join(', '))
+            .join('; ');
+          this.logger.warn(
+            `[MQTT Payload Invalid] Gói tin status từ topic ${topic} không hợp lệ: ${errorMessages}`,
+          );
+          return;
+        }
+
+        await this.telemetryService.updateDeviceStatus(deviceId, dto.status);
+      }
     } catch (error) {
       const errMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(
