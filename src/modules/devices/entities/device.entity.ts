@@ -5,6 +5,7 @@ import {
   ManyToOne,
   OneToMany,
   JoinColumn,
+  Index,
   type Relation,
 } from 'typeorm';
 import { DeviceStatus } from '../../../common/enums/device-status.enum.js';
@@ -12,6 +13,7 @@ import { Pond } from '../../ponds/entities/pond.entity.js';
 import { TelemetryData } from '../../telemetry/entities/telemetry-data.entity.js';
 
 @Entity('device')
+@Index(['status', 'lastActiveAt'])
 export class Device {
   @PrimaryGeneratedColumn('uuid', { name: 'device_id' })
   deviceId: string;

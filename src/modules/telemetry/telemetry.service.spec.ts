@@ -7,6 +7,7 @@ describe('TelemetryService', () => {
   let service: TelemetryService;
   let mockTelemetryRepo: any;
   let mockDeviceRepo: any;
+  let mockAlertRepo: any;
   let mockDataSource: any;
 
   beforeEach(() => {
@@ -19,7 +20,15 @@ describe('TelemetryService', () => {
 
     mockDeviceRepo = {
       findOne: vi.fn(),
+      find: vi.fn(),
       update: vi.fn().mockResolvedValue({ affected: 1 }),
+      save: vi.fn((data) => Promise.resolve(data)),
+    };
+
+    mockAlertRepo = {
+      findOne: vi.fn(),
+      create: vi.fn((data) => data),
+      save: vi.fn((data) => Promise.resolve({ id: '1', ...data })),
     };
 
     mockDataSource = {
@@ -29,6 +38,7 @@ describe('TelemetryService', () => {
     service = new TelemetryService(
       mockTelemetryRepo,
       mockDeviceRepo,
+      mockAlertRepo,
       mockDataSource,
     );
   });
@@ -100,6 +110,42 @@ describe('TelemetryService', () => {
         where: { deviceId: mockRecord.deviceId },
         order: { recordedAt: 'DESC' },
       });
+    });
+  });
+
+  describe('updateDeviceStatus', () => {
+    it('nên cập nhật thiết bị sang OFFLINE và tự động chèn bản ghi Alert', async () => {
+      const deviceId = 'test-device-id';
+      const mockDevice = { deviceId, pondId: 'test-pond-id', status: DeviceStatus.ONLINE, lastActiveAt: new Date() };
+      mockDeviceRepo.findOne.mockResolvedValue(mockDevice);
+      mockAlertRepo.findOne.mockResolvedValue(null);
+
+      await service.updateDeviceStatus(deviceId, DeviceStatus.OFFLINE);
+
+      expect(mockDevice.status).toBe(DeviceStatus.OFFLINE);
+      expect(mockDeviceRepo.save).toHaveBeenCalledWith(mockDevice);
+      expect(mockAlertRepo.findOne).toHaveBeenCalled();
+      expect(mockAlertRepo.create).toHaveBeenCalledWith(expect.objectContaining({
+        pondId: 'test-pond-id',
+        metricName: 'device_status',
+      }));
+      expect(mockAlertRepo.save).toHaveBeenCalled();
+    });
+  });
+
+  describe('checkAndMarkOfflineDevices', () => {
+    it('nên quét thiết bị không có tín hiệu quá thời gian và chuyển sang OFFLINE', async () => {
+      const mockDevice = { deviceId: 'test-device-id', pondId: 'test-pond-id', status: DeviceStatus.ONLINE };
+      mockDeviceRepo.find.mockResolvedValue([mockDevice]);
+      mockDeviceRepo.findOne.mockResolvedValue(mockDevice);
+      mockAlertRepo.findOne.mockResolvedValue(null);
+
+      const count = await service.checkAndMarkOfflineDevices(20);
+
+      expect(count).toBe(1);
+      expect(mockDeviceRepo.find).toHaveBeenCalled();
+      expect(mockDevice.status).toBe(DeviceStatus.OFFLINE);
+      expect(mockDeviceRepo.save).toHaveBeenCalledWith(mockDevice);
     });
   });
 });
