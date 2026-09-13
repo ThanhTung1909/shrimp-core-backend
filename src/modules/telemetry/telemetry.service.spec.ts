@@ -127,6 +127,7 @@ describe('TelemetryService', () => {
       expect(mockAlertRepo.findOne).toHaveBeenCalled();
       expect(mockAlertRepo.create).toHaveBeenCalledWith(expect.objectContaining({
         pondId: 'test-pond-id',
+        deviceId: 'test-device-id',
         metricName: 'device_status',
       }));
       expect(mockAlertRepo.save).toHaveBeenCalled();

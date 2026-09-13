@@ -188,10 +188,12 @@ export class TelemetryService implements OnModuleInit {
       if (!activeAlert) {
         const newAlert = this.alertRepo.create({
           pondId: device.pondId,
+          deviceId: device.deviceId,
           metricName: 'device_status',
           triggeredValue: 0,
           alertLevel: AlertLevel.CRITICAL,
           status: AlertStatus.ACTIVE,
+          message: `Thiết bị ${device.deviceName || device.deviceId} mất kết nối mạng đột ngột hoặc quá hạn phản hồi`,
         });
         await this.alertRepo.save(newAlert);
       }
