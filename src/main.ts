@@ -32,11 +32,11 @@ async function bootstrap() {
   const mqttClient = mqtt.connect(mqttUrl);
 
   mqttClient.on('connect', () => {
-    console.log(`✅ [MQTT] Kết nối thành công tới Broker: ${mqttUrl}`);
+    console.log(`[MQTT] Kết nối thành công tới Broker: ${mqttUrl}`);
   });
 
   mqttClient.on('error', (err) => {
-    console.error(`❌ [MQTT] Kết nối thất bại:`, err.message);
+    console.error(`[MQTT] Kết nối thất bại:`, err.message);
   });
 }
 bootstrap();

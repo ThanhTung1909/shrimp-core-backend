@@ -10,10 +10,13 @@ import { PredictionsModule } from './modules/predictions/predictions.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { RedisModule } from './common/redis/redis.module.js';
 
+import { ScheduleModule } from '@nestjs/schedule';
+
 @Module({
   imports: [
     // Load biến môi trường toàn cục
     ConfigModule.forRoot({ isGlobal: true }),
+    ScheduleModule.forRoot(),
 
     // Kết nối CSDL TimescaleDB
     TypeOrmModule.forRootAsync({
@@ -27,7 +30,7 @@ import { RedisModule } from './common/redis/redis.module.js';
         password: config.get<string>('DB_PASS'),
         database: config.get<string>('DB_NAME'),
         autoLoadEntities: true,
-        synchronize: true,
+        synchronize: config.get<string>('NODE_ENV') !== 'production',
       }),
     }),
 

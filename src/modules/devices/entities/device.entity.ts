@@ -5,13 +5,16 @@ import {
   ManyToOne,
   OneToMany,
   JoinColumn,
+  Index,
   type Relation,
 } from 'typeorm';
 import { DeviceStatus } from '../../../common/enums/device-status.enum.js';
 import { Pond } from '../../ponds/entities/pond.entity.js';
 import { TelemetryData } from '../../telemetry/entities/telemetry-data.entity.js';
+import { Alert } from '../../alerts/entities/alert.entity.js';
 
 @Entity('device')
+@Index(['status', 'lastActiveAt'])
 export class Device {
   @PrimaryGeneratedColumn('uuid', { name: 'device_id' })
   deviceId: string;
@@ -54,5 +57,8 @@ export class Device {
 
   @OneToMany(() => TelemetryData, (telemetry) => telemetry.device)
   telemetries: Relation<TelemetryData>[];
+
+  @OneToMany(() => Alert, (alert) => alert.device)
+  alerts: Relation<Alert>[];
 }
 
