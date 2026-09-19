@@ -1,4 +1,13 @@
-import { IsOptional, IsString, Length, Matches } from 'class-validator';
+import {
+  IsDateString,
+  IsEmail,
+  IsEnum,
+  IsOptional,
+  IsString,
+  Length,
+  Matches,
+} from 'class-validator';
+import { Gender } from '../../../common/enums/gender.enum.js';
 
 export class UpdateProfileDto {
   @IsOptional()
@@ -12,4 +21,17 @@ export class UpdateProfileDto {
     message: 'Số điện thoại không hợp lệ (phải gồm 10-11 chữ số)!',
   })
   phoneNumber?: string;
+
+  @IsOptional()
+  @IsEmail({}, { message: 'Email không đúng định dạng!' })
+  email?: string;
+
+  @IsOptional()
+  @IsEnum(Gender, { message: 'Giới tính không hợp lệ (MALE, FEMALE, OTHER)!' })
+  gender?: Gender;
+
+  @IsOptional()
+  @IsDateString({}, { message: 'Ngày sinh phải có định dạng YYYY-MM-DD hợp lệ!' })
+  dateOfBirth?: string;
 }
+

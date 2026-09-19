@@ -6,9 +6,11 @@ import {
   type Relation,
 } from 'typeorm';
 import { Role } from '../../../common/enums/role.enum.js';
+import { Gender } from '../../../common/enums/gender.enum.js';
 import { Pond } from '../../ponds/entities/pond.entity.js';
 import { Alert } from '../../alerts/entities/alert.entity.js';
 import { ManualTestLog } from '../../ponds/entities/manual-test-log.entity.js';
+import { UserSession } from '../../auth/entities/user-session.entity.js';
 
 @Entity('users')
 export class User {
@@ -20,6 +22,20 @@ export class User {
 
   @Column({ name: 'phone_number', type: 'varchar', length: 20, unique: true })
   phoneNumber: string;
+
+  @Column({ name: 'email', type: 'varchar', length: 150, unique: true, nullable: true })
+  email: string | null;
+
+  @Column({
+    type: 'enum',
+    enum: Gender,
+    enumName: 'gender',
+    nullable: true,
+  })
+  gender: Gender | null;
+
+  @Column({ name: 'date_of_birth', type: 'date', nullable: true })
+  dateOfBirth: Date | string | null;
 
   @Column({ name: 'password_hash', type: 'varchar', length: 255 })
   passwordHash: string;
@@ -38,6 +54,13 @@ export class User {
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
+  @Column({
+    name: 'must_change_password',
+    type: 'boolean',
+    default: false,
+  })
+  mustChangePassword: boolean;
+
   // version của token, mục đích là vô hiệu hóa các token cũ
   @Column({
     name: 'token_version',
@@ -54,6 +77,9 @@ export class User {
 
   @OneToMany(() => ManualTestLog, (log) => log.testedBy)
   testedLogs: Relation<ManualTestLog>[];
+
+  @OneToMany(() => UserSession, (session) => session.user)
+  sessions: Relation<UserSession>[];
 }
 
 

@@ -1,26 +1,36 @@
 import {
   Body,
   Controller,
+  Delete,
+  ForbiddenException,
   Get,
   NotFoundException,
   Param,
+  ParseUUIDPipe,
   Patch,
+  Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { UsersService } from './users.service.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { RolesGuard } from '../../common/guards/roles.guard.js';
+import { Roles } from '../../common/decorators/roles.decorator.js';
+import { Role } from '../../common/enums/role.enum.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { UpdateFcmTokenDto } from './dto/update-fcm-token.dto.js';
 import { AdminUpdateUserDto } from './dto/admin-update-user.dto.js';
+import { CreateUserDto } from './dto/create-user.dto.js';
+import { FindUsersQueryDto } from './dto/find-users-query.dto.js';
 
 @Controller('users')
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   // API 1: Người dùng tự cập nhật thông tin cá nhân (Profile)
   @Patch('profile')
-  @UseGuards(JwtAuthGuard)
   async updateProfile(
     @CurrentUser('userId') userId: string,
     @Body() updateProfileDto: UpdateProfileDto,
@@ -37,7 +47,6 @@ export class UsersController {
 
   // API 2: Cập nhật FCM Token nhận thông báo
   @Patch('fcm-token')
-  @UseGuards(JwtAuthGuard)
   async updateFcmToken(
     @CurrentUser('userId') userId: string,
     @Body() updateFcmTokenDto: UpdateFcmTokenDto,
@@ -48,10 +57,36 @@ export class UsersController {
     );
   }
 
-  // API 3: Lấy thông tin chi tiết người dùng theo ID
+  // API 3: Quản trị viên lấy danh sách tất cả người dùng
+  @Get()
+  @Roles(Role.MANAGER)
+  async getAllUsers(@Query() query: FindUsersQueryDto) {
+    return this.usersService.findAll(query);
+  }
+
+  // API 4: Quản trị viên tạo người dùng mới
+  @Post()
+  @Roles(Role.MANAGER)
+  async createUser(@Body() createUserDto: CreateUserDto) {
+    const newUser = await this.usersService.createUserByAdmin(createUserDto);
+    return {
+      message: 'Tạo tài khoản người dùng thành công!',
+      user: newUser,
+    };
+  }
+
+  // API 5: Lấy thông tin chi tiết người dùng theo ID
   @Get(':id')
-  @UseGuards(JwtAuthGuard)
-  async getUserById(@Param('id') id: string) {
+  async getUserById(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') currentUserId: string,
+    @CurrentUser('role') role: Role,
+  ) {
+    if (role !== Role.MANAGER && currentUserId !== id) {
+      throw new ForbiddenException(
+        'Bạn không có quyền truy cập thông tin của người dùng khác!',
+      );
+    }
     const user = await this.usersService.findById(id);
     if (!user) {
       throw new NotFoundException('Không tìm thấy người dùng!');
@@ -59,11 +94,11 @@ export class UsersController {
     return this.usersService.sanitizeUser(user);
   }
 
-  // API 4: Quản trị viên cập nhật thông tin/trạng thái tài khoản người dùng
+  // API 6: Quản trị viên cập nhật thông tin/trạng thái tài khoản người dùng
   @Patch(':id')
-  @UseGuards(JwtAuthGuard)
+  @Roles(Role.MANAGER)
   async adminUpdateUser(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() adminUpdateUserDto: AdminUpdateUserDto,
   ) {
     const updatedUser = await this.usersService.adminUpdateUser(
@@ -74,5 +109,12 @@ export class UsersController {
       message: 'Cập nhật tài khoản người dùng thành công!',
       user: updatedUser,
     };
+  }
+
+  // API 7: Quản trị viên xóa người dùng
+  @Delete(':id')
+  @Roles(Role.MANAGER)
+  async deleteUser(@Param('id', ParseUUIDPipe) id: string) {
+    return this.usersService.deleteUser(id);
   }
 }
