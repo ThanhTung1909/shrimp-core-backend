@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
 import { ConfigService } from '@nestjs/config';
+import { ValidationPipe } from '@nestjs/common';
 import * as mqtt from 'mqtt';
 
 async function bootstrap() {
@@ -9,6 +10,15 @@ async function bootstrap() {
 
   // Kích hoạt CORS cho các client khác gọi API
   app.enableCors();
+
+  // Kích hoạt ValidationPipe toàn cục
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      transformOptions: { enableImplicitConversion: true },
+    }),
+  );
 
   const port = configService.get<number>('PORT') || 3000;
   await app.listen(port);

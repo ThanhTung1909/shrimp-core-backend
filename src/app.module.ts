@@ -7,6 +7,8 @@ import { PondsModule } from './modules/ponds/ponds.module.js';
 import { DevicesModule } from './modules/devices/devices.module.js';
 import { AlertsModule } from './modules/alerts/alerts.module.js';
 import { PredictionsModule } from './modules/predictions/predictions.module.js';
+import { AuthModule } from './modules/auth/auth.module.js';
+import { RedisModule } from './common/redis/redis.module.js';
 
 import { ScheduleModule } from '@nestjs/schedule';
 
@@ -32,6 +34,12 @@ import { ScheduleModule } from '@nestjs/schedule';
       }),
     }),
 
+    // Module xác thực và phân quyền
+    AuthModule,
+
+    // Module lưu trữ dữ liệu in-memory Redis (Global)
+    RedisModule,
+    
     // Các modules thực thể cốt lõi
     UsersModule,
     PondsModule,

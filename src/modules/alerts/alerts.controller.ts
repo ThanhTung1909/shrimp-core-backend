@@ -43,7 +43,7 @@ export class AlertsController {
   ) {
     // Tạm thời truyền hard-code userId do hệ thống auth chưa được đề cập
     // Khi có auth, lấy userId từ req.user
-    const mockUserId = '00000000-0000-0000-0000-000000000000'; 
+    const mockUserId = '00000000-0000-0000-0000-000000000000';
     const result = await this.alertsService.resolveAlert(id, mockUserId, dto);
 
     return {
