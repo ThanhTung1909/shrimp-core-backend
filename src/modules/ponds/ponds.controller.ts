@@ -8,6 +8,7 @@ import {
   Post,
   Query,
   UseGuards,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { PondsService } from './ponds.service.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
@@ -60,7 +61,7 @@ export class PondsController {
 
   @Get(':id')
   async findPondById(
-    @Param('id') pondId: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ) {
@@ -69,7 +70,7 @@ export class PondsController {
 
   @Patch(':id')
   async updatePond(
-    @Param('id') pondId: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() updatePondDto: UpdatePondDto,
@@ -88,7 +89,7 @@ export class PondsController {
 
   @Delete(':id')
   async deletePond(
-    @Param('id') pondId: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ) {
@@ -101,7 +102,7 @@ export class PondsController {
 
   @Post(':pondId/thresholds')
   async createThreshold(
-    @Param('pondId') pondId: string,
+    @Param('pondId', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: CreateThresholdConfigDto,
@@ -120,7 +121,7 @@ export class PondsController {
 
   @Get(':pondId/thresholds')
   async findThresholdsByPond(
-    @Param('pondId') pondId: string,
+    @Param('pondId', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ) {
@@ -129,7 +130,7 @@ export class PondsController {
 
   @Patch('thresholds/:configId')
   async updateThreshold(
-    @Param('configId') configId: string,
+    @Param('configId', new ParseUUIDPipe({ version: '4' })) configId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: UpdateThresholdConfigDto,
@@ -148,7 +149,7 @@ export class PondsController {
 
   @Delete('thresholds/:configId')
   async deleteThreshold(
-    @Param('configId') configId: string,
+    @Param('configId', new ParseUUIDPipe({ version: '4' })) configId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ) {
@@ -161,7 +162,7 @@ export class PondsController {
 
   @Post(':pondId/manual-logs')
   async createManualLog(
-    @Param('pondId') pondId: string,
+    @Param('pondId', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: CreateManualTestLogDto,
@@ -180,7 +181,7 @@ export class PondsController {
 
   @Get(':pondId/manual-logs')
   async findManualLogsByPond(
-    @Param('pondId') pondId: string,
+    @Param('pondId', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Query() query: FindManualTestLogsQueryDto,
@@ -190,7 +191,7 @@ export class PondsController {
 
   @Get('manual-logs/:logId')
   async findManualLogById(
-    @Param('logId') logId: string,
+    @Param('logId', new ParseUUIDPipe({ version: '4' })) logId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ) {
@@ -199,7 +200,7 @@ export class PondsController {
 
   @Patch('manual-logs/:logId')
   async updateManualLog(
-    @Param('logId') logId: string,
+    @Param('logId', new ParseUUIDPipe({ version: '4' })) logId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: UpdateManualTestLogDto,
@@ -218,7 +219,7 @@ export class PondsController {
 
   @Delete('manual-logs/:logId')
   async deleteManualLog(
-    @Param('logId') logId: string,
+    @Param('logId', new ParseUUIDPipe({ version: '4' })) logId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ) {
