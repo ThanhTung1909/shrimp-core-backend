@@ -24,6 +24,9 @@ import { OtpService } from './otp.service.js';
 import { normalizePhone } from '../../common/redis/rate-limit.constants.js';
 import { EmailService } from '../email/email.service.js';
 
+const DUMMY_HASH =
+  '$2b$10$e8N8y2D2.f6Zf2g8H6J7K.1234567890abcdefghijklmnopqrstuv';
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -39,7 +42,12 @@ export class AuthService {
   ) {}
 
   //Hàm gửi OTP (Lưu SHA-256 hash vào Redis với TTL 5 phút)
-  async sendOtp(sendOtpDto: SendOtpDto) {
+  async sendOtp(sendOtpDto: SendOtpDto): Promise<{
+    message: string;
+    phoneNumber: string;
+    otp?: string;
+    expiresIn: string;
+  }> {
     const existingUser = await this.userService.findByPhoneNumber(
       sendOtpDto.phoneNumber,
     );
@@ -56,6 +64,11 @@ export class AuthService {
       );
       otp = result.otp;
     } else {
+      if (process.env.NODE_ENV === 'production') {
+        throw new InternalServerErrorException(
+          'Dịch vụ OTP chưa sẵn sàng, vui lòng liên hệ quản trị viên!',
+        );
+      }
       otp = '123456';
     }
 
@@ -68,13 +81,22 @@ export class AuthService {
   }
 
   //Hàm xác thực OTP (Xác thực atomic bằng Redis Lua Script)
-  async verifyOtp(verifyOtpDto: VerifyOtpDto) {
+  async verifyOtp(verifyOtpDto: VerifyOtpDto): Promise<{
+    message: string;
+    phoneNumber: string;
+    isValid: boolean;
+  }> {
     if (this.otpService) {
       await this.otpService.verifyOtp(
         verifyOtpDto.phoneNumber,
         verifyOtpDto.otp,
       );
     } else {
+      if (process.env.NODE_ENV === 'production') {
+        throw new InternalServerErrorException(
+          'Dịch vụ OTP chưa sẵn sàng, vui lòng liên hệ quản trị viên!',
+        );
+      }
       const MOCK_OTP = '123456';
       if (verifyOtpDto.otp !== MOCK_OTP) {
         throw new BadRequestException(
@@ -122,7 +144,17 @@ export class AuthService {
   }
 
   // Hàm đăng ký tài khoản (Tự động sinh mật khẩu, lưu DB bằng transaction, gửi mật khẩu qua email)
-  async register(registerDto: RegisterDto, _deviceName?: string | null) {
+  async register(
+    registerDto: RegisterDto,
+    _deviceName?: string | null,
+  ): Promise<{
+    message: string;
+    userId: string;
+    fullName: string;
+    phoneNumber: string;
+    email: string | null;
+    role: Role;
+  }> {
     const normalizedPhone = normalizePhone(registerDto.phoneNumber);
     if (!normalizedPhone) {
       throw new BadRequestException('Số điện thoại không hợp lệ!');
@@ -192,25 +224,32 @@ export class AuthService {
 
   //Hàm đăng nhập
   async login(loginDto: LoginDto, deviceName?: string | null) {
-    const user = await this.userService.findByPhoneNumber(loginDto.phoneNumber);
-    if (!user || !user.isActive) {
+    const user = await this.userService.findByPhoneNumber(
+      loginDto.phoneNumber,
+      true,
+    );
+
+    const hashToCompare = user?.passwordHash || DUMMY_HASH;
+    const isPasswordValid = await bcrypt.compare(
+      loginDto.password,
+      hashToCompare,
+    );
+
+    if (!user || !isPasswordValid) {
       throw new UnauthorizedException(
         'Số điện thoại hoặc mật khẩu không đúng!',
       );
     }
-    const isPasswordValid = await bcrypt.compare(
-      loginDto.password,
-      user.passwordHash,
-    );
 
-    if (!isPasswordValid) {
+    if (!user.isActive) {
       throw new UnauthorizedException(
-        'Số điện thoại hoặc mật khẩu không đúng!',
+        'Tài khoản của bạn đã bị khóa hoặc ngừng hoạt động. Vui lòng liên hệ quản trị viên!',
       );
     }
 
     const accessPayload = {
       sub: user.userId,
+      phoneNumber: user.phoneNumber,
       tokenVersion: user.tokenVersion,
       role: user.role,
       type: 'access',
@@ -363,6 +402,7 @@ export class AuthService {
         // 2. Tạo tokens mới
         const newAccessToken = await this.jwtService.signAsync({
           sub: user.userId,
+          phoneNumber: user.phoneNumber,
           tokenVersion: user.tokenVersion,
           role: user.role,
           type: 'access',
@@ -427,7 +467,7 @@ export class AuthService {
 
   // Hàm thay đổi mật khẩu (Phase 7 - Change Password & Revoke All Sessions)
   async changePassword(userId: string, changePasswordDto: ChangePasswordDto) {
-    const user = await this.userService.findById(userId);
+    const user = await this.userService.findById(userId, true);
 
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Không tìm thấy người dùng!');
@@ -452,7 +492,10 @@ export class AuthService {
           algorithms: ['HS256'],
         });
 
-        if (refreshPayload.type === 'refresh' && refreshPayload.sub === userId) {
+        if (
+          refreshPayload.type === 'refresh' &&
+          refreshPayload.sub === userId
+        ) {
           const refreshTokenHash = crypto
             .createHash('sha256')
             .update(refreshToken)
@@ -504,6 +547,7 @@ export class AuthService {
       // 5. Tạo Access Token mới cho thiết bị hiện tại
       const newAccessToken = await this.jwtService.signAsync({
         sub: userId,
+        phoneNumber: user.phoneNumber,
         tokenVersion: newTokenVersion,
         role: user.role,
         type: 'access',
