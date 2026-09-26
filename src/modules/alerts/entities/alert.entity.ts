@@ -47,6 +47,7 @@ export class Alert {
 
   // Mức độ cảnh báo: WARNING hoặc CRITICAL
   @Column({
+    name: 'alert_level',
     type: 'enum',
     enum: AlertLevel,
     enumName: 'alert_level',
