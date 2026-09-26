@@ -13,6 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { UsersService } from './users.service.js';
+import { User } from './entities/user.entity.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../../common/guards/roles.guard.js';
 import { Roles } from '../../common/decorators/roles.decorator.js';
@@ -34,7 +35,10 @@ export class UsersController {
   async updateProfile(
     @CurrentUser('userId') userId: string,
     @Body() updateProfileDto: UpdateProfileDto,
-  ) {
+  ): Promise<{
+    message: string;
+    user: Omit<User, 'passwordHash'>;
+  }> {
     const updatedUser = await this.usersService.updateProfile(
       userId,
       updateProfileDto,
@@ -50,7 +54,7 @@ export class UsersController {
   async updateFcmToken(
     @CurrentUser('userId') userId: string,
     @Body() updateFcmTokenDto: UpdateFcmTokenDto,
-  ) {
+  ): Promise<{ message: string }> {
     return this.usersService.updateFcmToken(
       userId,
       updateFcmTokenDto.fcmToken,
@@ -60,14 +64,23 @@ export class UsersController {
   // API 3: Quản trị viên lấy danh sách tất cả người dùng
   @Get()
   @Roles(Role.MANAGER)
-  async getAllUsers(@Query() query: FindUsersQueryDto) {
+  async getAllUsers(@Query() query: FindUsersQueryDto): Promise<{
+    data: Omit<User, 'passwordHash'>[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
     return this.usersService.findAll(query);
   }
 
   // API 4: Quản trị viên tạo người dùng mới
   @Post()
   @Roles(Role.MANAGER)
-  async createUser(@Body() createUserDto: CreateUserDto) {
+  async createUser(@Body() createUserDto: CreateUserDto): Promise<{
+    message: string;
+    user: Omit<User, 'passwordHash'>;
+  }> {
     const newUser = await this.usersService.createUserByAdmin(createUserDto);
     return {
       message: 'Tạo tài khoản người dùng thành công!',
@@ -81,7 +94,7 @@ export class UsersController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') currentUserId: string,
     @CurrentUser('role') role: Role,
-  ) {
+  ): Promise<Omit<User, 'passwordHash'>> {
     if (role !== Role.MANAGER && currentUserId !== id) {
       throw new ForbiddenException(
         'Bạn không có quyền truy cập thông tin của người dùng khác!',
@@ -100,7 +113,10 @@ export class UsersController {
   async adminUpdateUser(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() adminUpdateUserDto: AdminUpdateUserDto,
-  ) {
+  ): Promise<{
+    message: string;
+    user: Omit<User, 'passwordHash'>;
+  }> {
     const updatedUser = await this.usersService.adminUpdateUser(
       id,
       adminUpdateUserDto,
@@ -114,7 +130,9 @@ export class UsersController {
   // API 7: Quản trị viên xóa người dùng
   @Delete(':id')
   @Roles(Role.MANAGER)
-  async deleteUser(@Param('id', ParseUUIDPipe) id: string) {
+  async deleteUser(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<{ message: string }> {
     return this.usersService.deleteUser(id);
   }
 }

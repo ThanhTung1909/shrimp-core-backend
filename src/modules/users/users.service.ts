@@ -26,7 +26,17 @@ export class UsersService {
   }
 
   // Tìm người dùng theo số điện thoại
-  async findByPhoneNumber(phoneNumber: string): Promise<User | null> {
+  async findByPhoneNumber(
+    phoneNumber: string,
+    selectPassword = false,
+  ): Promise<User | null> {
+    if (selectPassword) {
+      return this.usersRepository
+        .createQueryBuilder('user')
+        .addSelect('user.passwordHash')
+        .where('user.phoneNumber = :phoneNumber', { phoneNumber })
+        .getOne();
+    }
     return this.usersRepository.findOne({
       where: {
         phoneNumber,
@@ -44,7 +54,17 @@ export class UsersService {
   }
 
   // Tìm người dùng theo ID
-  async findById(userId: string): Promise<User | null> {
+  async findById(
+    userId: string,
+    selectPassword = false,
+  ): Promise<User | null> {
+    if (selectPassword) {
+      return this.usersRepository
+        .createQueryBuilder('user')
+        .addSelect('user.passwordHash')
+        .where('user.userId = :userId', { userId })
+        .getOne();
+    }
     return this.usersRepository.findOne({
       where: {
         userId,
@@ -147,7 +167,16 @@ export class UsersService {
   ): Promise<User> {
     const repo = manager ? manager.getRepository(User) : this.usersRepository;
     const newUser = repo.create(userData);
-    return repo.save(newUser);
+    try {
+      return await repo.save(newUser);
+    } catch (error: any) {
+      if (error?.code === '23505') {
+        throw new ConflictException(
+          'Số điện thoại hoặc email này đã được sử dụng bởi tài khoản khác!',
+        );
+      }
+      throw error;
+    }
   }
 
   // Quản trị viên tạo người dùng mới
@@ -180,8 +209,17 @@ export class UsersService {
       mustChangePassword: dto.mustChangePassword ?? false,
     });
 
-    const savedUser = await this.usersRepository.save(newUser);
-    return this.sanitizeUser(savedUser);
+    try {
+      const savedUser = await this.usersRepository.save(newUser);
+      return this.sanitizeUser(savedUser);
+    } catch (error: any) {
+      if (error?.code === '23505') {
+        throw new ConflictException(
+          'Số điện thoại hoặc email này đã được sử dụng bởi tài khoản khác!',
+        );
+      }
+      throw error;
+    }
   }
 
   // Người dùng cập nhật thông tin cá nhân (Profile)
@@ -237,8 +275,17 @@ export class UsersService {
       user.dateOfBirth = updateProfileDto.dateOfBirth || null;
     }
 
-    const updatedUser = await this.usersRepository.save(user);
-    return this.sanitizeUser(updatedUser);
+    try {
+      const updatedUser = await this.usersRepository.save(user);
+      return this.sanitizeUser(updatedUser);
+    } catch (error: any) {
+      if (error?.code === '23505') {
+        throw new ConflictException(
+          'Số điện thoại hoặc email này đã được sử dụng bởi tài khoản khác!',
+        );
+      }
+      throw error;
+    }
   }
 
   // Cập nhật FCM token để nhận thông báo đẩy
@@ -336,8 +383,17 @@ export class UsersService {
       user.tokenVersion = (user.tokenVersion || 0) + 1;
     }
 
-    const savedUser = await this.usersRepository.save(user);
-    return this.sanitizeUser(savedUser);
+    try {
+      const savedUser = await this.usersRepository.save(user);
+      return this.sanitizeUser(savedUser);
+    } catch (error: any) {
+      if (error?.code === '23505') {
+        throw new ConflictException(
+          'Số điện thoại hoặc email này đã được sử dụng bởi tài khoản khác!',
+        );
+      }
+      throw error;
+    }
   }
 
   // Quản trị viên xóa người dùng

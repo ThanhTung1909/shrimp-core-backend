@@ -30,7 +30,8 @@ export class RolesGuard implements CanActivate {
       );
     }
 
-    const hasRole = requiredRoles.includes(user.role);
+    const hasRole =
+      user.role === Role.ADMIN || requiredRoles.includes(user.role);
     if (!hasRole) {
       throw new ForbiddenException(
         'Bạn không có quyền truy cập chức năng này!',

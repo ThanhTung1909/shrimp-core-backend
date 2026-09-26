@@ -1,7 +1,8 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
 import { ConfigService } from '@nestjs/config';
-import { ValidationPipe } from '@nestjs/common';
+import { ClassSerializerInterceptor, ValidationPipe } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import * as mqtt from 'mqtt';
 
 async function bootstrap() {
@@ -10,6 +11,9 @@ async function bootstrap() {
 
   // Kích hoạt CORS cho các client khác gọi API
   app.enableCors();
+
+  // Kích hoạt ClassSerializerInterceptor toàn cục (để @Exclude() tự động hoạt động)
+  app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));
 
   // Kích hoạt ValidationPipe toàn cục
   app.useGlobalPipes(
@@ -21,9 +25,9 @@ async function bootstrap() {
   );
 
   const port = configService.get<number>('PORT') || 3000;
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
   console.log(
-    `🚀 [NestJS] Core Backend đang chạy tại: http://localhost:${port}`,
+    `🚀 [NestJS] Core Backend đang chạy tại: http://0.0.0.0:${port}`,
   );
 
   // Test kết nối MQTT Broker nội bộ
