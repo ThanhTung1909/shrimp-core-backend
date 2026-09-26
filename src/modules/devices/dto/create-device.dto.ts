@@ -1,5 +1,6 @@
 import {
   IsEnum,
+  IsMACAddress,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -16,7 +17,9 @@ export class CreateDeviceDto {
 
   @IsNotEmpty({ message: 'Địa chỉ MAC không được để trống!' })
   @IsString({ message: 'Địa chỉ MAC phải là chuỗi ký tự!' })
-  @Length(6, 50, { message: 'Địa chỉ MAC phải từ 6 đến 50 ký tự!' })
+  @IsMACAddress({
+    message: 'Địa chỉ MAC không đúng định dạng!',
+  })
   macAddress: string;
 
   @IsNotEmpty({ message: 'Ao nuôi (pondId) không được để trống!' })

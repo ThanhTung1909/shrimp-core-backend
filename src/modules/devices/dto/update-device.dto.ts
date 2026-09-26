@@ -1,6 +1,7 @@
 import {
   IsDateString,
   IsEnum,
+  IsMACAddress,
   IsOptional,
   IsString,
   IsUUID,
@@ -16,7 +17,9 @@ export class UpdateDeviceDto {
 
   @IsOptional()
   @IsString({ message: 'Địa chỉ MAC phải là chuỗi ký tự!' })
-  @Length(6, 50, { message: 'Địa chỉ MAC phải từ 6 đến 50 ký tự!' })
+  @IsMACAddress({
+    message: 'Địa chỉ MAC không đúng định dạng!',
+  })
   macAddress?: string;
 
   @IsOptional()

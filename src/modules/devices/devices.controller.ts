@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -51,7 +52,7 @@ export class DevicesController {
 
   @Get(':id')
   async findDeviceById(
-    @Param('id') deviceId: string,
+    @Param('id', ParseUUIDPipe) deviceId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ) {
@@ -60,7 +61,7 @@ export class DevicesController {
 
   @Patch(':id')
   async updateDevice(
-    @Param('id') deviceId: string,
+    @Param('id', ParseUUIDPipe) deviceId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() updateDeviceDto: UpdateDeviceDto,
@@ -79,7 +80,7 @@ export class DevicesController {
 
   @Delete(':id')
   async deleteDevice(
-    @Param('id') deviceId: string,
+    @Param('id', ParseUUIDPipe) deviceId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ) {

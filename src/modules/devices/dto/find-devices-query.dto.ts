@@ -4,6 +4,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -20,6 +21,9 @@ export class FindDevicesQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(100, {
+    message: 'Mỗi trang tối đa 100 thiết bị!',
+  })
   limit?: number = 10;
 
   @IsOptional()
