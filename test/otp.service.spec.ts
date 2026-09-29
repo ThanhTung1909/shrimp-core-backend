@@ -1,3 +1,4 @@
+import { OtpPurpose } from '../src/common/redis/otp.constants.js';
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { ConfigService } from '@nestjs/config';
 import { BadRequestException } from '@nestjs/common';
@@ -85,9 +86,9 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
   describe('2. Redis Storage, Hashing & TTL', () => {
     it('Test 3 — Redis stores SHA-256 hash (64 hex characters), not plaintext OTP', async () => {
       const phone = getNextPhone();
-      const { otp, otpHash } = await otpService.createAndSaveOtp(phone);
+      const { otp, otpHash } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
-      const stored = await otpService.getOtpCodeHash(phone);
+      const stored = await otpService.getOtpCodeHash(OtpPurpose.REGISTER, phone);
       expect(stored).not.toBeNull();
       expect(stored).not.toBe(otp); // Plaintext is NOT stored
       expect(stored).toBe(otpHash);
@@ -97,7 +98,7 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
 
     it('Test 4 — OTP TTL is set to 300s (5 minutes)', async () => {
       const phone = getNextPhone();
-      await otpService.createAndSaveOtp(phone);
+      await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
       const ttl = await redisService.ttl(getOtpCodeKey(phone));
       expect(ttl).toBeGreaterThan(0);
@@ -106,9 +107,9 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
 
     it('Test 5 — Attempts starts at zero and has TTL', async () => {
       const phone = getNextPhone();
-      await otpService.createAndSaveOtp(phone);
+      await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
-      const attempts = await otpService.getOtpAttempts(phone);
+      const attempts = await otpService.getOtpAttempts(OtpPurpose.REGISTER, phone);
       expect(attempts).toBe(0);
 
       const attemptsTtl = await redisService.ttl(getOtpAttemptsKey(phone));
@@ -120,9 +121,9 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
   describe('3. Verification Flow & One-Time Use', () => {
     it('Test 6 — Correct OTP succeeds, deletes code and attempts, and sets verified marker', async () => {
       const phone = getNextPhone();
-      const { otp } = await otpService.createAndSaveOtp(phone);
+      const { otp } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
-      const result = await otpService.verifyOtp(phone, otp);
+      const result = await otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp);
       expect(result).toBe(true);
 
       // OTP key and attempts must be deleted immediately
@@ -130,7 +131,7 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
       expect(await redisService.exists(getOtpAttemptsKey(phone))).toBe(0);
 
       // Verified marker must exist with TTL <= 600s
-      const verified = await otpService.isPhoneVerified(phone);
+      const verified = await otpService.isPhoneVerified(OtpPurpose.REGISTER, phone);
       expect(verified).toBe(true);
 
       const markerTtl = await redisService.ttl(getOtpVerifiedKey(phone));
@@ -140,39 +141,39 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
 
     it('Test 7 — Correct OTP is one-time use (second verify fails)', async () => {
       const phone = getNextPhone();
-      const { otp } = await otpService.createAndSaveOtp(phone);
+      const { otp } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
       // First verification succeeds
-      await expect(otpService.verifyOtp(phone, otp)).resolves.toBe(true);
+      await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp)).resolves.toBe(true);
 
       // Second verification with the same OTP must FAIL
-      await expect(otpService.verifyOtp(phone, otp)).rejects.toThrow(BadRequestException);
+      await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp)).rejects.toThrow(BadRequestException);
     });
   });
 
   describe('4. Wrong Attempts & Invalidation', () => {
     it('Test 8 — Wrong OTP increments attempts counter (1..4)', async () => {
       const phone = getNextPhone();
-      await otpService.createAndSaveOtp(phone);
+      await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
       for (let attempt = 1; attempt <= 4; attempt++) {
-        await expect(otpService.verifyOtp(phone, '000000')).rejects.toThrow(BadRequestException);
-        const count = await otpService.getOtpAttempts(phone);
+        await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, '000000')).rejects.toThrow(BadRequestException);
+        const count = await otpService.getOtpAttempts(OtpPurpose.REGISTER, phone);
         expect(count).toBe(attempt);
       }
     });
 
     it('Test 9 — Fifth wrong attempt invalidates and deletes OTP and attempts key', async () => {
       const phone = getNextPhone();
-      await otpService.createAndSaveOtp(phone);
+      await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
       // 4 wrong attempts
       for (let i = 1; i <= 4; i++) {
-        await expect(otpService.verifyOtp(phone, '000000')).rejects.toThrow(BadRequestException);
+        await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, '000000')).rejects.toThrow(BadRequestException);
       }
 
       // 5th wrong attempt -> triggers deletion
-      await expect(otpService.verifyOtp(phone, '000000')).rejects.toThrow(BadRequestException);
+      await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, '000000')).rejects.toThrow(BadRequestException);
 
       // Code and attempts keys must be deleted
       expect(await redisService.exists(getOtpCodeKey(phone))).toBe(0);
@@ -181,56 +182,56 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
 
     it('Test 10 — Sixth attempt cannot work even with correct OTP', async () => {
       const phone = getNextPhone();
-      const { otp } = await otpService.createAndSaveOtp(phone);
+      const { otp } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
       // 5 wrong attempts
       for (let i = 1; i <= 5; i++) {
-        await expect(otpService.verifyOtp(phone, '000000')).rejects.toThrow(BadRequestException);
+        await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, '000000')).rejects.toThrow(BadRequestException);
       }
 
       // 6th attempt with the CORRECT OTP must still fail
-      await expect(otpService.verifyOtp(phone, otp)).rejects.toThrow(BadRequestException);
+      await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp)).rejects.toThrow(BadRequestException);
     });
 
     it('Test 11 — New OTP resets attempts to 0 and replaces old OTP', async () => {
       const phone = getNextPhone();
-      const { otp: otpA } = await otpService.createAndSaveOtp(phone);
+      const { otp: otpA } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
       // 2 wrong attempts on OTP A
-      await expect(otpService.verifyOtp(phone, '000000')).rejects.toThrow(BadRequestException);
-      await expect(otpService.verifyOtp(phone, '000000')).rejects.toThrow(BadRequestException);
-      expect(await otpService.getOtpAttempts(phone)).toBe(2);
+      await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, '000000')).rejects.toThrow(BadRequestException);
+      await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, '000000')).rejects.toThrow(BadRequestException);
+      expect(await otpService.getOtpAttempts(OtpPurpose.REGISTER, phone)).toBe(2);
 
       // Send new OTP B for the same phone
-      const { otp: otpB } = await otpService.createAndSaveOtp(phone);
+      const { otp: otpB } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
       // Attempts must be reset to 0
-      expect(await otpService.getOtpAttempts(phone)).toBe(0);
+      expect(await otpService.getOtpAttempts(OtpPurpose.REGISTER, phone)).toBe(0);
 
       // Old OTP A must no longer work
-      await expect(otpService.verifyOtp(phone, otpA)).rejects.toThrow(BadRequestException);
+      await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, otpA)).rejects.toThrow(BadRequestException);
 
       // New OTP B must succeed
-      await expect(otpService.verifyOtp(phone, otpB)).resolves.toBe(true);
+      await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, otpB)).resolves.toBe(true);
     });
   });
 
   describe('5. Expiration & Isolation', () => {
     it('Test 12 — Expired OTP cannot be verified', async () => {
       const phone = getNextPhone();
-      const { otp } = await otpService.createAndSaveOtp(phone, 1); // 1s TTL
+      const { otp } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone, 1); // 1s TTL
 
       // Wait 1.1s for expiration
       await new Promise((resolve) => setTimeout(resolve, 1100));
 
-      await expect(otpService.verifyOtp(phone, otp)).rejects.toThrow(BadRequestException);
+      await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp)).rejects.toThrow(BadRequestException);
     });
 
     it('Test 13 — Verified marker TTL is between 0 and 600s', async () => {
       const phone = getNextPhone();
-      const { otp } = await otpService.createAndSaveOtp(phone);
+      const { otp } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
-      await otpService.verifyOtp(phone, otp);
+      await otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp);
 
       const ttl = await redisService.ttl(getOtpVerifiedKey(phone));
       expect(ttl).toBeGreaterThan(0);
@@ -241,27 +242,27 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
       const phoneA = getNextPhone();
       const phoneB = getNextPhone();
 
-      const { otp: otpA } = await otpService.createAndSaveOtp(phoneA);
-      const { otp: otpB } = await otpService.createAndSaveOtp(phoneB);
+      const { otp: otpA } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phoneA);
+      const { otp: otpB } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phoneB);
 
       // Verifying A does not affect B
-      await expect(otpService.verifyOtp(phoneA, otpA)).resolves.toBe(true);
+      await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phoneA, otpA)).resolves.toBe(true);
 
       // B is still intact and can be verified
       expect(await redisService.exists(getOtpCodeKey(phoneB))).toBe(1);
-      await expect(otpService.verifyOtp(phoneB, otpB)).resolves.toBe(true);
+      await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phoneB, otpB)).resolves.toBe(true);
     });
   });
 
   describe('6. Concurrency & Fail-Closed Behavior', () => {
     it('Test 15 — Concurrent verification cannot both succeed (exactly 1 success, 1 failure)', async () => {
       const phone = getNextPhone();
-      const { otp } = await otpService.createAndSaveOtp(phone);
+      const { otp } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
       // Fire 2 concurrent verification requests for the exact same OTP
       const results = await Promise.allSettled([
-        otpService.verifyOtp(phone, otp),
-        otpService.verifyOtp(phone, otp),
+        otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp),
+        otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp),
       ]);
 
       const fulfilled = results.filter((r) => r.status === 'fulfilled');
@@ -286,12 +287,12 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
 
       // Send OTP failure must throw, not succeed
       await expect(
-        failingOtpService.createAndSaveOtp('0912345678'),
+        failingOtpService.createAndSaveOtp(OtpPurpose.REGISTER, '0912345678'),
       ).rejects.toThrow('Redis connection lost');
 
       // Verify OTP failure must throw, not return true
       await expect(
-        failingOtpService.verifyOtp('0912345678', '123456'),
+        failingOtpService.verifyOtp(OtpPurpose.REGISTER, '0912345678', '123456'),
       ).rejects.toThrow('Redis connection lost');
     });
   });
@@ -306,13 +307,13 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
       expect(sendRes.expiresIn).toBe('5 phút');
       expect(sendRes.otp).toBeDefined();
 
-      const verifyRes = await authService.verifyOtp({ phoneNumber: phone, otp: sendRes.otp! });
+      const verifyRes = await authService.verifyOtp(OtpPurpose.REGISTER, { phoneNumber: phone, otp: sendRes.otp! });
       expect(verifyRes.message).toBe('Xác thực OTP thành công!');
       expect(verifyRes.isValid).toBe(true);
 
       // One-time check: verifying again throws BadRequestException
       await expect(
-        authService.verifyOtp({ phoneNumber: phone, otp: sendRes.otp! }),
+        authService.verifyOtp(OtpPurpose.REGISTER, { phoneNumber: phone, otp: sendRes.otp! }),
       ).rejects.toThrow(BadRequestException);
     });
   });
