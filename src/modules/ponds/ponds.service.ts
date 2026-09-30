@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -25,6 +26,12 @@ import { CreateManualTestLogDto } from './dto/create-manual-test-log.dto.js';
 import { UpdateManualTestLogDto } from './dto/update-manual-test-log.dto.js';
 import { FindManualTestLogsQueryDto } from './dto/find-manual-test-logs-query.dto.js';
 import { Role } from '../../common/enums/role.enum.js';
+import {
+  MessageOnlyResponse,
+  PaginatedResponse,
+  ThresholdMetricMetadata,
+  ThresholdResponse,
+} from './dto/pond-response.dto.js';
 
 @Injectable()
 export class PondsService {
@@ -46,6 +53,14 @@ export class PondsService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<Pond> {
+    const existingPond = await this.pondRepo.findOne({
+      where: { pondName: createPondDto.pondName },
+    });
+
+    if (existingPond) {
+      throw new ConflictException('Tên ao nuôi đã tồn tại!');
+    }
+
     const targetUserId =
       currentUserRole === Role.MANAGER && createPondDto.userId
         ? createPondDto.userId
@@ -63,13 +78,7 @@ export class PondsService {
     query: FindPondsQueryDto,
     currentUserId: string,
     currentUserRole: Role,
-  ): Promise<{
-    data: Pond[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  }> {
+  ): Promise<PaginatedResponse<Pond>> {
     const { page = 1, limit = 10, search, status, userId } = query;
     const skip = (page - 1) * limit;
 
@@ -155,7 +164,18 @@ export class PondsService {
     if (updatePondDto.userId && currentUserRole === Role.MANAGER) {
       pond.userId = updatePondDto.userId;
     }
-    if (updatePondDto.pondName !== undefined) {
+    if (
+      updatePondDto.pondName !== undefined &&
+      updatePondDto.pondName !== pond.pondName
+    ) {
+      const existingPond = await this.pondRepo.findOne({
+        where: { pondName: updatePondDto.pondName },
+      });
+
+      if (existingPond && existingPond.pondId !== pondId) {
+        throw new ConflictException('Tên ao nuôi đã tồn tại!');
+      }
+
       pond.pondName = updatePondDto.pondName;
     }
     if (updatePondDto.areaM2 !== undefined) {
@@ -170,6 +190,12 @@ export class PondsService {
     if (updatePondDto.status !== undefined) {
       pond.status = updatePondDto.status;
     }
+    if (updatePondDto.location !== undefined) {
+      pond.location = updatePondDto.location;
+    }
+    if (updatePondDto.capacity !== undefined) {
+      pond.capacity = updatePondDto.capacity;
+    }
 
     return await this.pondRepo.save(pond);
   }
@@ -178,7 +204,7 @@ export class PondsService {
     pondId: string,
     currentUserId: string,
     currentUserRole: Role,
-  ): Promise<{ message: string }> {
+  ): Promise<MessageOnlyResponse> {
     const pond = await this.findPondById(
       pondId,
       currentUserId,
@@ -218,14 +244,14 @@ export class PondsService {
     pondId: string,
     currentUserId: string,
     currentUserRole: Role,
-  ): Promise<any[]> {
+  ): Promise<ThresholdResponse[]> {
     await this.findPondById(pondId, currentUserId, currentUserRole);
     const configs = await this.thresholdRepo.find({
       where: { pondId },
       order: { metricName: 'ASC' },
     });
 
-    const METRIC_META: Record<string, { unit: string; color: string; dangerFactor: number }> = {
+    const METRIC_META: Record<string, ThresholdMetricMetadata> = {
       pH: { unit: '', color: '#2dd4c3', dangerFactor: 0.8 },
       DO: { unit: 'mg/L', color: '#38bdf8', dangerFactor: 0.7 },
       dissolvedOxygen: { unit: 'mg/L', color: '#38bdf8', dangerFactor: 0.7 },
@@ -237,7 +263,11 @@ export class PondsService {
     };
 
     return configs.map((c) => {
-      const meta = METRIC_META[c.metricName] || { unit: '', color: '#38bdf8', dangerFactor: 0.8 };
+      const meta = METRIC_META[c.metricName] ?? {
+        unit: '',
+        color: '#38bdf8',
+        dangerFactor: 0.8,
+      };
       const normalMin = Number(c.minValue);
       const normalMax = Number(c.maxValue);
       const dangerMin = Number((normalMin * meta.dangerFactor).toFixed(1));
@@ -305,7 +335,7 @@ export class PondsService {
     configId: string,
     currentUserId: string,
     currentUserRole: Role,
-  ): Promise<{ message: string }> {
+  ): Promise<MessageOnlyResponse> {
     const config = await this.thresholdRepo.findOne({
       where: { configId },
       relations: {
@@ -357,13 +387,7 @@ export class PondsService {
     query: FindManualTestLogsQueryDto,
     currentUserId: string,
     currentUserRole: Role,
-  ): Promise<{
-    data: ManualTestLog[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  }> {
+  ): Promise<PaginatedResponse<ManualTestLog>> {
     await this.findPondById(pondId, currentUserId, currentUserRole);
 
     const { page = 1, limit = 10, startDate, endDate } = query;
@@ -457,7 +481,7 @@ export class PondsService {
     logId: string,
     currentUserId: string,
     currentUserRole: Role,
-  ): Promise<{ message: string }> {
+  ): Promise<MessageOnlyResponse> {
     const log = await this.findManualLogById(
       logId,
       currentUserId,

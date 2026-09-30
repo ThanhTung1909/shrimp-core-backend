@@ -14,6 +14,7 @@ import { PondsService } from './ponds.service.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../../common/guards/roles.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import { Roles } from '../../common/decorators/roles.decorator.js';
 import { Role } from '../../common/enums/role.enum.js';
 import { CreatePondDto } from './dto/create-pond.dto.js';
 import { UpdatePondDto } from './dto/update-pond.dto.js';
@@ -23,6 +24,15 @@ import { UpdateThresholdConfigDto } from './dto/update-threshold-config.dto.js';
 import { CreateManualTestLogDto } from './dto/create-manual-test-log.dto.js';
 import { UpdateManualTestLogDto } from './dto/update-manual-test-log.dto.js';
 import { FindManualTestLogsQueryDto } from './dto/find-manual-test-logs-query.dto.js';
+import { Pond } from './entities/pond.entity.js';
+import { ThresholdConfig } from './entities/threshold-config.entity.js';
+import { ManualTestLog } from './entities/manual-test-log.entity.js';
+import {
+  MessageOnlyResponse,
+  MessageResponse,
+  PaginatedResponse,
+  ThresholdResponse,
+} from './dto/pond-response.dto.js';
 
 @Controller('ponds')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -33,12 +43,13 @@ export class PondsController {
   // 1. POND ENDPOINTS
   // ==========================================
 
+  @Roles(Role.ADMIN, Role.MANAGER)
   @Post()
   async createPond(
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() createPondDto: CreatePondDto,
-  ) {
+  ): Promise<MessageResponse<Pond>> {
     const pond = await this.pondsService.createPond(
       createPondDto,
       userId,
@@ -55,7 +66,7 @@ export class PondsController {
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Query() query: FindPondsQueryDto,
-  ) {
+  ): Promise<PaginatedResponse<Pond>> {
     return this.pondsService.findAllPonds(query, userId, role);
   }
 
@@ -64,17 +75,18 @@ export class PondsController {
     @Param('id', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
-  ) {
+  ): Promise<Pond> {
     return this.pondsService.findPondById(pondId, userId, role);
   }
 
+  @Roles(Role.ADMIN, Role.MANAGER)
   @Patch(':id')
   async updatePond(
     @Param('id', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() updatePondDto: UpdatePondDto,
-  ) {
+  ): Promise<MessageResponse<Pond>> {
     const pond = await this.pondsService.updatePond(
       pondId,
       updatePondDto,
@@ -87,12 +99,13 @@ export class PondsController {
     };
   }
 
+  @Roles(Role.ADMIN, Role.MANAGER)
   @Delete(':id')
   async deletePond(
     @Param('id', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
-  ) {
+  ): Promise<MessageOnlyResponse> {
     return this.pondsService.deletePond(pondId, userId, role);
   }
 
@@ -106,7 +119,7 @@ export class PondsController {
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: CreateThresholdConfigDto,
-  ) {
+  ): Promise<MessageResponse<ThresholdConfig>> {
     const config = await this.pondsService.createThresholdConfig(
       pondId,
       dto,
@@ -124,7 +137,7 @@ export class PondsController {
     @Param('pondId', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
-  ) {
+  ): Promise<ThresholdResponse[]> {
     return this.pondsService.findThresholdsByPond(pondId, userId, role);
   }
 
@@ -134,7 +147,7 @@ export class PondsController {
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: UpdateThresholdConfigDto,
-  ) {
+  ): Promise<MessageResponse<ThresholdConfig>> {
     const config = await this.pondsService.updateThresholdConfig(
       configId,
       dto,
@@ -152,7 +165,7 @@ export class PondsController {
     @Param('configId', new ParseUUIDPipe({ version: '4' })) configId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
-  ) {
+  ): Promise<MessageOnlyResponse> {
     return this.pondsService.deleteThresholdConfig(configId, userId, role);
   }
 
@@ -166,7 +179,7 @@ export class PondsController {
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: CreateManualTestLogDto,
-  ) {
+  ): Promise<MessageResponse<ManualTestLog>> {
     const log = await this.pondsService.createManualTestLog(
       pondId,
       dto,
@@ -185,7 +198,7 @@ export class PondsController {
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Query() query: FindManualTestLogsQueryDto,
-  ) {
+  ): Promise<PaginatedResponse<ManualTestLog>> {
     return this.pondsService.findManualLogsByPond(pondId, query, userId, role);
   }
 
@@ -194,7 +207,7 @@ export class PondsController {
     @Param('logId', new ParseUUIDPipe({ version: '4' })) logId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
-  ) {
+  ): Promise<ManualTestLog> {
     return this.pondsService.findManualLogById(logId, userId, role);
   }
 
@@ -204,7 +217,7 @@ export class PondsController {
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: UpdateManualTestLogDto,
-  ) {
+  ): Promise<MessageResponse<ManualTestLog>> {
     const log = await this.pondsService.updateManualTestLog(
       logId,
       dto,
@@ -222,7 +235,7 @@ export class PondsController {
     @Param('logId', new ParseUUIDPipe({ version: '4' })) logId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
-  ) {
+  ): Promise<MessageOnlyResponse> {
     return this.pondsService.deleteManualTestLog(logId, userId, role);
   }
 }

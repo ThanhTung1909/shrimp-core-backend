@@ -1,5 +1,7 @@
 import {
   IsEnum,
+  IsInt,
+  Min,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -15,6 +17,15 @@ export class CreatePondDto {
   @IsString({ message: 'Tên ao phải là chuỗi ký tự!' })
   @Length(2, 100, { message: 'Tên ao phải từ 2 đến 100 ký tự!' })
   pondName: string;
+
+  @IsOptional()
+  @IsString({ message: 'Vị trí ao phải là chuỗi ký tự!' })
+  location?: string;
+
+  @IsOptional()
+  @IsInt({ message: 'Sức chứa ao phải là số nguyên!' })
+  @Min(0, { message: 'Sức chứa ao không được âm!' })
+  capacity?: number;
 
   @IsNotEmpty({ message: 'Diện tích ao không được để trống!' })
   @IsNumber({}, { message: 'Diện tích ao phải là số thực!' })

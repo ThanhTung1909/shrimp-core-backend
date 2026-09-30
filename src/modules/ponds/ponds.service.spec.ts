@@ -3,6 +3,10 @@ import { PondsService } from './ponds.service.js';
 import { Role } from '../../common/enums/role.enum.js';
 import { PondStatus } from '../../common/enums/pond-status.enum.js';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ConflictException } from '@nestjs/common';
+import { validate } from 'class-validator';
+import { CreatePondDto } from './dto/create-pond.dto.js';
+import { UpdatePondDto } from './dto/update-pond.dto.js';
 
 describe('PondsService', () => {
   let service: PondsService;
@@ -58,6 +62,23 @@ describe('PondsService', () => {
       const result = await service.createPond(dto, currentUserId, Role.MANAGER);
 
       expect(result.userId).toBe('farmer-2');
+    });
+
+    it('tên ao đã tồn tại -> ConflictException', async () => {
+      mockPondRepo.findOne.mockResolvedValue({
+        pondId: 'pond-existing',
+        pondName: 'Ao 1',
+      });
+
+      await expect(
+        service.createPond(
+          { pondName: 'Ao 1', areaM2: 100, depthM: 2, shrimpDensity: 100 },
+          'manager-1',
+          Role.MANAGER,
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(mockPondRepo.save).not.toHaveBeenCalled();
     });
   });
 
@@ -169,6 +190,69 @@ describe('PondsService', () => {
       expect(result.userId).toBe('farmer-new');
       expect(mockPondRepo.save).toHaveBeenCalled();
     });
+
+    it('đổi sang tên của ao khác -> ConflictException', async () => {
+      mockPondRepo.findOne
+        .mockResolvedValueOnce({
+          pondId: 'pond-1',
+          userId: 'manager-1',
+          pondName: 'Ao 1',
+        })
+        .mockResolvedValueOnce({ pondId: 'pond-2', pondName: 'Ao 2' });
+
+      await expect(
+        service.updatePond(
+          'pond-1',
+          { pondName: 'Ao 2' },
+          'manager-1',
+          Role.MANAGER,
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(mockPondRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('giữ nguyên tên của chính ao -> hợp lệ', async () => {
+      const pond = {
+        pondId: 'pond-1',
+        userId: 'manager-1',
+        pondName: 'Ao 1',
+      };
+      mockPondRepo.findOne.mockResolvedValue(pond);
+
+      await expect(
+        service.updatePond(
+          'pond-1',
+          { pondName: 'Ao 1' },
+          'manager-1',
+          Role.MANAGER,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ pondName: 'Ao 1' }));
+
+      expect(mockPondRepo.findOne).toHaveBeenCalledTimes(1);
+    });
+
+    it('update capacity bằng 0 -> persist giá trị 0', async () => {
+      const pond = {
+        pondId: 'pond-1',
+        userId: 'manager-1',
+        pondName: 'Ao 1',
+        capacity: 100,
+      };
+      mockPondRepo.findOne.mockResolvedValue(pond);
+
+      const result = await service.updatePond(
+        'pond-1',
+        { capacity: 0 },
+        'manager-1',
+        Role.MANAGER,
+      );
+
+      expect(result.capacity).toBe(0);
+      expect(mockPondRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ capacity: 0 }),
+      );
+    });
   });
 
   describe('deletePond (E. DELETE)', () => {
@@ -203,6 +287,71 @@ describe('PondsService', () => {
       await service.deletePond('pond-1', 'manager-1', Role.MANAGER);
 
       expect(mockPondRepo.remove).toHaveBeenCalledWith(mockPond);
+    });
+  });
+
+  describe('Pond DTO validation', () => {
+    const requiredPondFields = {
+      pondName: 'Ao kiểm thử',
+      areaM2: 100,
+      depthM: 2,
+      shrimpDensity: 100,
+    };
+
+    it('UpdatePondDto là partial của CreatePondDto', async () => {
+      const dto = new UpdatePondDto();
+
+      await expect(validate(dto)).resolves.toHaveLength(0);
+    });
+
+    it('location là optional và chấp nhận chuỗi hợp lệ', async () => {
+      const dto = Object.assign(new CreatePondDto(), {
+        ...requiredPondFields,
+        location: 'Khu A',
+      });
+
+      await expect(validate(dto)).resolves.toHaveLength(0);
+    });
+
+    it('location và capacity đều optional với CreatePondDto hợp lệ', async () => {
+      const dto = Object.assign(new CreatePondDto(), requiredPondFields);
+
+      await expect(validate(dto)).resolves.toHaveLength(0);
+    });
+
+    it('capacity optional, chấp nhận 0 và số nguyên dương', async () => {
+      const zeroCapacity = Object.assign(new CreatePondDto(), {
+        ...requiredPondFields,
+        capacity: 0,
+      });
+      const positiveCapacity = Object.assign(new CreatePondDto(), {
+        ...requiredPondFields,
+        capacity: 1000,
+      });
+
+      await expect(validate(zeroCapacity)).resolves.toHaveLength(0);
+      await expect(validate(positiveCapacity)).resolves.toHaveLength(0);
+      await expect(validate(new CreatePondDto())).resolves.not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ property: 'capacity' }),
+        ]),
+      );
+    });
+
+    it('capacity từ chối số âm và số thập phân', async () => {
+      const negativeCapacity = Object.assign(new UpdatePondDto(), {
+        capacity: -1,
+      });
+      const decimalCapacity = Object.assign(new UpdatePondDto(), {
+        capacity: 1.5,
+      });
+
+      expect(await validate(negativeCapacity)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ property: 'capacity' })]),
+      );
+      expect(await validate(decimalCapacity)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ property: 'capacity' })]),
+      );
     });
   });
 });
