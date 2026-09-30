@@ -14,6 +14,7 @@ import { DevicesService } from './devices.service.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../../common/guards/roles.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import { Roles } from '../../common/decorators/roles.decorator.js';
 import { Role } from '../../common/enums/role.enum.js';
 import { CreateDeviceDto } from './dto/create-device.dto.js';
 import { UpdateDeviceDto } from './dto/update-device.dto.js';
@@ -24,6 +25,7 @@ import { FindDevicesQueryDto } from './dto/find-devices-query.dto.js';
 export class DevicesController {
   constructor(private readonly devicesService: DevicesService) {}
 
+  @Roles(Role.MANAGER)
   @Post()
   async createDevice(
     @CurrentUser('userId') userId: string,
@@ -59,6 +61,7 @@ export class DevicesController {
     return this.devicesService.findDeviceById(deviceId, userId, role);
   }
 
+  @Roles(Role.MANAGER)
   @Patch(':id')
   async updateDevice(
     @Param('id', ParseUUIDPipe) deviceId: string,
@@ -78,6 +81,7 @@ export class DevicesController {
     };
   }
 
+  @Roles(Role.MANAGER)
   @Delete(':id')
   async deleteDevice(
     @Param('id', ParseUUIDPipe) deviceId: string,
