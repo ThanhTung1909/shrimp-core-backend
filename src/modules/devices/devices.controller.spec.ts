@@ -24,33 +24,47 @@ describe('DevicesController authorization metadata', () => {
     }) as ExecutionContext;
 
   const mutationHandlers = [
-    controller.createDevice,
-    controller.updateDevice,
-    controller.deleteDevice,
+    ['POST', controller.createDevice],
+    ['PATCH', controller.updateDevice],
+    ['DELETE', controller.deleteDevice],
+  ] as const;
+
+  const getHandlers = [
+    ['GET collection', controller.findAllDevices],
+    ['GET detail', controller.findDeviceById],
   ];
 
   it.each(mutationHandlers)(
-    'mutation yêu cầu chính xác MANAGER',
-    (handler) => {
-      expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([Role.MANAGER]);
+    '%s metadata yêu cầu chính xác ADMIN và MANAGER',
+    (_method, handler) => {
+      expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([
+        Role.ADMIN,
+        Role.MANAGER,
+      ]);
     },
   );
 
-  it.each(mutationHandlers)('MANAGER được phép mutation', (handler) => {
+  it.each(mutationHandlers)('ADMIN được phép %s', (_method, handler) => {
+    expect(rolesGuard.canActivate(createContext(handler, Role.ADMIN))).toBe(
+      true,
+    );
+  });
+
+  it.each(mutationHandlers)('MANAGER được phép %s', (_method, handler) => {
     expect(rolesGuard.canActivate(createContext(handler, Role.MANAGER))).toBe(
       true,
     );
   });
 
-  it.each(mutationHandlers)('FARMER bị chặn mutation', (handler) => {
+  it.each(mutationHandlers)('FARMER bị chặn %s', (_method, handler) => {
     expect(() =>
       rolesGuard.canActivate(createContext(handler, Role.FARMER)),
     ).toThrow(ForbiddenException);
   });
 
-  it.each([controller.findAllDevices, controller.findDeviceById])(
-    'GET không có mutation-role restriction',
-    (handler) => {
+  it.each(getHandlers)(
+    '%s không có mutation-role metadata và FARMER đi qua RolesGuard',
+    (_endpoint, handler) => {
       expect(Reflect.getMetadata(ROLES_KEY, handler)).toBeUndefined();
       expect(rolesGuard.canActivate(createContext(handler, Role.FARMER))).toBe(
         true,

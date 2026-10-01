@@ -25,7 +25,7 @@ import { FindDevicesQueryDto } from './dto/find-devices-query.dto.js';
 export class DevicesController {
   constructor(private readonly devicesService: DevicesService) {}
 
-  @Roles(Role.MANAGER)
+  @Roles(Role.ADMIN, Role.MANAGER)
   @Post()
   async createDevice(
     @CurrentUser('userId') userId: string,
@@ -61,7 +61,7 @@ export class DevicesController {
     return this.devicesService.findDeviceById(deviceId, userId, role);
   }
 
-  @Roles(Role.MANAGER)
+  @Roles(Role.ADMIN, Role.MANAGER)
   @Patch(':id')
   async updateDevice(
     @Param('id', ParseUUIDPipe) deviceId: string,
@@ -81,7 +81,7 @@ export class DevicesController {
     };
   }
 
-  @Roles(Role.MANAGER)
+  @Roles(Role.ADMIN, Role.MANAGER)
   @Delete(':id')
   async deleteDevice(
     @Param('id', ParseUUIDPipe) deviceId: string,
