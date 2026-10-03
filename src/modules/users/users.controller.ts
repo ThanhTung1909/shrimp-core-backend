@@ -25,6 +25,10 @@ import { AdminUpdateUserDto } from './dto/admin-update-user.dto.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
 import { FindUsersQueryDto } from './dto/find-users-query.dto.js';
 
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+
+@ApiTags('Users - Quản Lý Người Dùng')
+@ApiBearerAuth('JWT-auth')
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {
@@ -32,6 +36,8 @@ export class UsersController {
 
   // API 1: Người dùng tự cập nhật thông tin cá nhân (Profile)
   @Patch('profile')
+  @ApiOperation({ summary: 'Người dùng tự cập nhật thông tin cá nhân (Profile)' })
+  @ApiResponse({ status: 200, description: 'Cập nhật thông tin thành công' })
   async updateProfile(
     @CurrentUser('userId') userId: string,
     @Body() updateProfileDto: UpdateProfileDto,
@@ -51,6 +57,8 @@ export class UsersController {
 
   // API 2: Cập nhật FCM Token nhận thông báo
   @Patch('fcm-token')
+  @ApiOperation({ summary: 'Cập nhật FCM Token để nhận thông báo đẩy Mobile' })
+  @ApiResponse({ status: 200, description: 'Cập nhật FCM Token thành công' })
   async updateFcmToken(
     @CurrentUser('userId') userId: string,
     @Body() updateFcmTokenDto: UpdateFcmTokenDto,
@@ -64,6 +72,9 @@ export class UsersController {
   // API 3: Quản trị viên lấy danh sách tất cả người dùng
   @Get()
   @Roles(Role.MANAGER)
+  @ApiOperation({ summary: 'Quản trị viên lấy danh sách người dùng (Có phân trang & Tìm kiếm)' })
+  @ApiResponse({ status: 200, description: 'Danh sách người dùng phân trang' })
+  @ApiResponse({ status: 403, description: 'Không có quyền truy cập' })
   async getAllUsers(@Query() query: FindUsersQueryDto): Promise<{
     data: Omit<User, 'passwordHash'>[];
     total: number;
@@ -77,6 +88,9 @@ export class UsersController {
   // API 4: Quản trị viên tạo người dùng mới
   @Post()
   @Roles(Role.MANAGER)
+  @ApiOperation({ summary: 'Quản trị viên khởi tạo tài khoản người dùng mới' })
+  @ApiResponse({ status: 201, description: 'Tạo người dùng thành công' })
+  @ApiResponse({ status: 409, description: 'Số điện thoại đã tồn tại' })
   async createUser(@Body() createUserDto: CreateUserDto): Promise<{
     message: string;
     user: Omit<User, 'passwordHash'>;
@@ -90,6 +104,9 @@ export class UsersController {
 
   // API 5: Lấy thông tin chi tiết người dùng theo ID
   @Get(':id')
+  @ApiOperation({ summary: 'Lấy thông tin chi tiết người dùng theo UUID' })
+  @ApiResponse({ status: 200, description: 'Chi tiết người dùng' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy người dùng' })
   async getUserById(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') currentUserId: string,
@@ -110,6 +127,8 @@ export class UsersController {
   // API 6: Quản trị viên cập nhật thông tin/trạng thái tài khoản người dùng
   @Patch(':id')
   @Roles(Role.MANAGER)
+  @ApiOperation({ summary: 'Quản trị viên cập nhật thông tin hoặc trạng thái tài khoản người dùng' })
+  @ApiResponse({ status: 200, description: 'Cập nhật tài khoản thành công' })
   async adminUpdateUser(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() adminUpdateUserDto: AdminUpdateUserDto,
@@ -130,6 +149,8 @@ export class UsersController {
   // API 7: Quản trị viên xóa người dùng
   @Delete(':id')
   @Roles(Role.MANAGER)
+  @ApiOperation({ summary: 'Quản trị viên xóa tài khoản người dùng' })
+  @ApiResponse({ status: 200, description: 'Xóa tài khoản người dùng thành công' })
   async deleteUser(
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<{ message: string }> {

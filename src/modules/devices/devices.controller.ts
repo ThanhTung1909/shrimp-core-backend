@@ -23,6 +23,10 @@ import { UpdateDeviceStatusDto } from './dto/update-device-status.dto.js';
 import { FindDevicesQueryDto } from './dto/find-devices-query.dto.js';
 import { Device } from './entities/device.entity.js';
 
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+
+@ApiTags('Devices - Quản Lý Thiết Bị IoT')
+@ApiBearerAuth('JWT-auth')
 @Controller('devices')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class DevicesController {
@@ -30,6 +34,9 @@ export class DevicesController {
 
   @Roles(Role.ADMIN, Role.MANAGER)
   @Post()
+  @ApiOperation({ summary: 'Quản trị viên đăng ký thiết bị IoT mới (Địa chỉ MAC)' })
+  @ApiResponse({ status: 201, description: 'Đăng ký thiết bị thành công' })
+  @ApiResponse({ status: 409, description: 'Địa chỉ MAC đã được đăng ký' })
   async createDevice(
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
@@ -47,6 +54,8 @@ export class DevicesController {
   }
 
   @Get()
+  @ApiOperation({ summary: 'Lấy danh sách thiết bị IoT (Phân trang, Tìm kiếm MAC/tên, Lọc theo pondId, status)' })
+  @ApiResponse({ status: 200, description: 'Danh sách thiết bị phân trang' })
   async findAllDevices(
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
@@ -56,6 +65,9 @@ export class DevicesController {
   }
 
   @Get(':id')
+  @ApiOperation({ summary: 'Lấy thông tin chi tiết thiết bị IoT theo UUID' })
+  @ApiResponse({ status: 200, description: 'Chi tiết thiết bị IoT' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy thiết bị' })
   async findDeviceById(
     @Param('id', ParseUUIDPipe) deviceId: string,
     @CurrentUser('userId') userId: string,
@@ -66,6 +78,8 @@ export class DevicesController {
 
   @Roles(Role.ADMIN, Role.MANAGER)
   @Patch(':id')
+  @ApiOperation({ summary: 'Quản trị viên cập nhật thông tin/firmware thiết bị' })
+  @ApiResponse({ status: 200, description: 'Cập nhật thiết bị thành công' })
   async updateDevice(
     @Param('id', ParseUUIDPipe) deviceId: string,
     @CurrentUser('userId') userId: string,
@@ -86,6 +100,8 @@ export class DevicesController {
 
   @Roles(Role.ADMIN, Role.MANAGER)
   @Patch(':id/pond')
+  @ApiOperation({ summary: 'Gán hoặc gỡ thiết bị IoT khỏi ao nuôi' })
+  @ApiResponse({ status: 200, description: 'Gán/gỡ thiết bị thành công' })
   async assignToPond(
     @Param('id', ParseUUIDPipe) deviceId: string,
     @CurrentUser('userId') userId: string,
@@ -108,6 +124,8 @@ export class DevicesController {
 
   @Roles(Role.ADMIN, Role.MANAGER)
   @Patch(':id/status')
+  @ApiOperation({ summary: 'Cập nhật trạng thái hoạt động của thiết bị (ONLINE, OFFLINE, MAINTENANCE)' })
+  @ApiResponse({ status: 200, description: 'Cập nhật trạng thái thành công' })
   async updateStatus(
     @Param('id', ParseUUIDPipe) deviceId: string,
     @CurrentUser('userId') userId: string,
@@ -128,6 +146,8 @@ export class DevicesController {
 
   @Roles(Role.ADMIN, Role.MANAGER)
   @Delete(':id')
+  @ApiOperation({ summary: 'Quản trị viên xóa thiết bị IoT' })
+  @ApiResponse({ status: 200, description: 'Xóa thiết bị thành công' })
   async deleteDevice(
     @Param('id', ParseUUIDPipe) deviceId: string,
     @CurrentUser('userId') userId: string,

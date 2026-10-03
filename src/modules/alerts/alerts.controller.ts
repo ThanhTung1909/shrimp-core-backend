@@ -11,6 +11,10 @@ import { AlertsService } from './alerts.service.js';
 import { QueryAlertDto } from './dto/query-alert.dto.js';
 import { ResolveAlertDto } from './dto/resolve-alert.dto.js';
 
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+
+@ApiTags('Alerts - Cảnh Báo Vi Phạm & Nguy Cơ')
+@ApiBearerAuth('JWT-auth')
 @Controller('alerts')
 export class AlertsController {
   constructor(private readonly alertsService: AlertsService) {}
@@ -20,6 +24,8 @@ export class AlertsController {
    * GET /alerts
    */
   @Get()
+  @ApiOperation({ summary: 'Lấy danh sách các cảnh báo (Lọc theo deviceId, trạng thái ACTIVE/RESOLVED, phân trang)' })
+  @ApiResponse({ status: 200, description: 'Danh sách cảnh báo phân trang' })
   async findAll(@Query() query: QueryAlertDto) {
     const { data, total } = await this.alertsService.findAll(query);
 
@@ -37,12 +43,13 @@ export class AlertsController {
    * PATCH /alerts/:id/resolve
    */
   @Patch(':id/resolve')
+  @ApiOperation({ summary: 'Xác nhận và đánh dấu đã xử lý sự cố cảnh báo (Resolve alert + ghi chú)' })
+  @ApiResponse({ status: 200, description: 'Đã giải quyết cảnh báo thành công' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy cảnh báo với ID được chỉ định' })
   async resolve(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ResolveAlertDto,
   ) {
-    // Tạm thời truyền hard-code userId do hệ thống auth chưa được đề cập
-    // Khi có auth, lấy userId từ req.user
     const mockUserId = '00000000-0000-0000-0000-000000000000';
     const result = await this.alertsService.resolveAlert(id, mockUserId, dto);
 
