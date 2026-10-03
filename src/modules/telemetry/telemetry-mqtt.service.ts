@@ -98,6 +98,10 @@ export class TelemetryMqttService implements OnModuleInit, OnModuleDestroy {
       const type = match[2]; // 'data' hoặc 'status'
 
       if (type === 'data') {
+        if (typeof parsedJson === 'object' && parsedJson !== null) {
+          parsedJson.deviceId = parsedJson.deviceId || deviceId;
+        }
+
         const dto = plainToInstance(CreateTelemetryDto, parsedJson);
         const errors = await validate(dto);
 
