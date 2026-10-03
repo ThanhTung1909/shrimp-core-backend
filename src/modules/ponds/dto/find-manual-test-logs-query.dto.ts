@@ -13,6 +13,7 @@ export class FindManualTestLogsQueryDto {
   @IsInt()
   @Min(1)
   @Max(100, { message: 'Số lượng tối đa mỗi trang là 100!' })
+
   limit?: number = 10;
 
   @IsOptional()

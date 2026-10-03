@@ -175,7 +175,7 @@ export class TelemetryService implements OnModuleInit {
     }
     const updatedDevice = await this.deviceRepo.save(device);
 
-    if (status === DeviceStatus.OFFLINE) {
+    if (status === DeviceStatus.OFFLINE && device.pondId) {
       const activeAlert = await this.alertRepo.findOne({
         where: {
           pondId: device.pondId,
