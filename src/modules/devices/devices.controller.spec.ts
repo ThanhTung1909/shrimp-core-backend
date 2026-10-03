@@ -25,7 +25,9 @@ describe('DevicesController authorization metadata', () => {
 
   const mutationHandlers = [
     ['POST', controller.createDevice],
-    ['PATCH', controller.updateDevice],
+    ['PATCH updateDevice', controller.updateDevice],
+    ['PATCH assignToPond', controller.assignToPond],
+    ['PATCH updateStatus', controller.updateStatus],
     ['DELETE', controller.deleteDevice],
   ] as const;
 

@@ -439,4 +439,75 @@ describe('DevicesService', () => {
       expect(mockDeviceRepo.remove).not.toHaveBeenCalled();
     });
   });
+
+  describe('assignToPond', () => {
+    it('nên gán thiết bị vào ao khi hợp lệ', async () => {
+      const device = {
+        deviceId,
+        pondId: null,
+        macAddress: 'AA:BB:CC:DD:EE:FF',
+        pond: null,
+      };
+
+      mockDeviceRepo.findOne.mockResolvedValue(device);
+      mockPondRepo.findOne.mockResolvedValue({
+        pondId,
+        userId: farmerId,
+      });
+
+      const result = await service.assignToPond(
+        deviceId,
+        { pondId },
+        farmerId,
+        Role.FARMER,
+      );
+
+      expect(result.pondId).toBe(pondId);
+      expect(mockDeviceRepo.save).toHaveBeenCalledWith(device);
+    });
+
+    it('nên tháo thiết bị khỏi ao khi pondId = null', async () => {
+      const device = {
+        deviceId,
+        pondId,
+        macAddress: 'AA:BB:CC:DD:EE:FF',
+        pond: { pondId, userId: farmerId },
+      };
+
+      mockDeviceRepo.findOne.mockResolvedValue(device);
+
+      const result = await service.assignToPond(
+        deviceId,
+        { pondId: null },
+        farmerId,
+        Role.FARMER,
+      );
+
+      expect(result.pondId).toBeNull();
+      expect(mockDeviceRepo.save).toHaveBeenCalledWith(device);
+    });
+  });
+
+  describe('updateStatus', () => {
+    it('nên cập nhật trạng thái thiết bị sang MAINTENANCE', async () => {
+      const device = {
+        deviceId,
+        status: DeviceStatus.ONLINE,
+        pond: { pondId, userId: farmerId },
+      };
+
+      mockDeviceRepo.findOne.mockResolvedValue(device);
+
+      const result = await service.updateStatus(
+        deviceId,
+        { status: DeviceStatus.MAINTENANCE },
+        farmerId,
+        Role.FARMER,
+      );
+
+      expect(result.status).toBe(DeviceStatus.MAINTENANCE);
+      expect(mockDeviceRepo.save).toHaveBeenCalledWith(device);
+    });
+  });
 });
+

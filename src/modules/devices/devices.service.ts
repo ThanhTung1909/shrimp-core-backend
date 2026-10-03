@@ -10,8 +10,18 @@ import { Device } from './entities/device.entity.js';
 import { Pond } from '../ponds/entities/pond.entity.js';
 import { CreateDeviceDto } from './dto/create-device.dto.js';
 import { UpdateDeviceDto } from './dto/update-device.dto.js';
+import { AssignPondDto } from './dto/assign-pond.dto.js';
+import { UpdateDeviceStatusDto } from './dto/update-device-status.dto.js';
 import { FindDevicesQueryDto } from './dto/find-devices-query.dto.js';
 import { Role } from '../../common/enums/role.enum.js';
+
+export interface PaginatedDevicesResult {
+  data: Device[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
 
 @Injectable()
 export class DevicesService {
@@ -20,7 +30,7 @@ export class DevicesService {
     private readonly deviceRepo: Repository<Device>,
     @InjectRepository(Pond)
     private readonly pondRepo: Repository<Pond>,
-  ) { }
+  ) {}
 
   async createDevice(
     dto: CreateDeviceDto,
@@ -37,19 +47,24 @@ export class DevicesService {
       );
     }
 
-    // 2. Kiểm tra quyền truy cập vào ao nuôi
-    const pond = await this.pondRepo.findOne({
-      where: { pondId: dto.pondId },
+    // 2. Kiểm tra quyền truy cập vào ao nuôi (nếu có truyền pondId)
+    if (dto.pondId) {
+      const pond = await this.pondRepo.findOne({
+        where: { pondId: dto.pondId },
+      });
+      if (!pond) {
+        throw new NotFoundException(`Không tìm thấy ao nuôi với ID: ${dto.pondId}`);
+      }
+
+      if (currentUserRole === Role.FARMER && pond.userId !== currentUserId) {
+        throw new ForbiddenException('Bạn không có quyền gắn thiết bị vào ao này!');
+      }
+    }
+
+    const device = this.deviceRepo.create({
+      ...dto,
+      pondId: dto.pondId || null,
     });
-    if (!pond) {
-      throw new NotFoundException(`Không tìm thấy ao nuôi với ID: ${dto.pondId}`);
-    }
-
-    if (currentUserRole === Role.FARMER && pond.userId !== currentUserId) {
-      throw new ForbiddenException('Bạn không có quyền gắn thiết bị vào ao này!');
-    }
-
-    const device = this.deviceRepo.create(dto);
     return await this.deviceRepo.save(device);
   }
 
@@ -57,13 +72,7 @@ export class DevicesService {
     query: FindDevicesQueryDto,
     currentUserId: string,
     currentUserRole: Role,
-  ): Promise<{
-    data: Device[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  }> {
+  ): Promise<PaginatedDevicesResult> {
     const { page = 1, limit = 10, search, pondId, status } = query;
     const skip = (page - 1) * limit;
 
@@ -179,9 +188,54 @@ export class DevicesService {
     if (dto.firmwareVersion !== undefined)
       device.firmwareVersion = dto.firmwareVersion;
     if (dto.status !== undefined) device.status = dto.status;
-    if (dto.lastActiveAt !== undefined)
-      device.lastActiveAt = new Date(dto.lastActiveAt);
 
+    return await this.deviceRepo.save(device);
+  }
+
+  async assignToPond(
+    deviceId: string,
+    assignPondDto: AssignPondDto,
+    currentUserId: string,
+    currentUserRole: Role,
+  ): Promise<Device> {
+    const device = await this.findDeviceById(
+      deviceId,
+      currentUserId,
+      currentUserRole,
+    );
+
+    if (assignPondDto.pondId) {
+      const pond = await this.pondRepo.findOne({
+        where: { pondId: assignPondDto.pondId },
+      });
+      if (!pond) {
+        throw new NotFoundException(
+          `Không tìm thấy ao nuôi với ID: ${assignPondDto.pondId}`,
+        );
+      }
+      if (currentUserRole === Role.FARMER && pond.userId !== currentUserId) {
+        throw new ForbiddenException('Bạn không có quyền gán thiết bị vào ao này!');
+      }
+      device.pondId = assignPondDto.pondId;
+    } else {
+      device.pondId = null;
+    }
+
+    return await this.deviceRepo.save(device);
+  }
+
+  async updateStatus(
+    deviceId: string,
+    updateStatusDto: UpdateDeviceStatusDto,
+    currentUserId: string,
+    currentUserRole: Role,
+  ): Promise<Device> {
+    const device = await this.findDeviceById(
+      deviceId,
+      currentUserId,
+      currentUserRole,
+    );
+    device.status = updateStatusDto.status;
     return await this.deviceRepo.save(device);
   }
 
@@ -199,3 +253,4 @@ export class DevicesService {
     return { message: 'Xóa thiết bị thành công!' };
   }
 }
+

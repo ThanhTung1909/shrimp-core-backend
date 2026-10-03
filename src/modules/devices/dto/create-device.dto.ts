@@ -22,9 +22,9 @@ export class CreateDeviceDto {
   })
   macAddress: string;
 
-  @IsNotEmpty({ message: 'Ao nuôi (pondId) không được để trống!' })
-  @IsUUID()
-  pondId: string;
+  @IsOptional()
+  @IsUUID('4', { message: 'ID ao nuôi phải là UUID v4 hợp lệ!' })
+  pondId?: string;
 
   @IsOptional()
   @IsString({ message: 'Phiên bản firmware phải là chuỗi ký tự!' })

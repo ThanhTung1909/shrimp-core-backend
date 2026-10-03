@@ -9,6 +9,6 @@ import { DevicesService } from './devices.service.js';
   imports: [TypeOrmModule.forFeature([Device, Pond])],
   controllers: [DevicesController],
   providers: [DevicesService],
-  exports: [TypeOrmModule],
+  exports: [DevicesService, TypeOrmModule],
 })
 export class DevicesModule {}
