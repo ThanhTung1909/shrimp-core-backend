@@ -1,3 +1,6 @@
+import { ForbiddenException } from '@nestjs/common';
+import { LoginSecurityService } from '../../common/redis/login-security.service.js';
+import { Role } from '../../common/enums/role.enum.js';
 import {
   ConflictException,
   Injectable,
@@ -17,6 +20,7 @@ export class UsersService {
   constructor(
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+    private readonly loginSecurityService: LoginSecurityService,
   ) {}
 
   // Loại bỏ passwordHash trước khi trả về client
@@ -406,4 +410,32 @@ export class UsersService {
     await this.usersRepository.remove(user);
     return { message: 'Xóa người dùng thành công!' };
   }
+
+  async setLoginLocked(userId: string, isLoginLocked: boolean, manager?: EntityManager) {
+    const repo = manager ? manager.getRepository(User) : this.usersRepository;
+    await repo.update({ userId }, { isLoginLocked });
+  }
+
+  async unlockPasswordLogin(actorId: string, actorRole: string, targetId: string) {
+    if (actorId === targetId) {
+      throw new ForbiddenException('Không thể tự mở khóa cho chính mình!');
+    }
+
+    const targetUser = await this.usersRepository.findOneBy({ userId: targetId });
+    if (!targetUser) {
+      throw new NotFoundException('Không tìm thấy người dùng!');
+    }
+
+    if (actorRole === Role.FARMER) {
+      throw new ForbiddenException('Bạn không có quyền mở khóa tài khoản!');
+    }
+
+    if (actorRole === Role.MANAGER && targetUser.role !== Role.FARMER) {
+      throw new ForbiddenException('Quản lý chỉ có thể mở khóa cho nông dân!');
+    }
+
+    await this.setLoginLocked(targetId, false);
+    await this.loginSecurityService.clear(targetId);
+  }
+
 }

@@ -58,6 +58,9 @@ export class User {
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
+  @Column({ name: 'is_login_locked', type: 'boolean', default: false })
+  isLoginLocked: boolean;
+
   @Column({
     name: 'must_change_password',
     type: 'boolean',

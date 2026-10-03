@@ -49,6 +49,7 @@ describe('BE-022 Authentication Tests', () => {
       findById: vi.fn(),
       updatePassword: vi.fn(),
       incrementTokenVersion: vi.fn().mockResolvedValue(2),
+      setLoginLocked: vi.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({

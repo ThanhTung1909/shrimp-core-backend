@@ -135,4 +135,16 @@ export class UsersController {
   ): Promise<{ message: string }> {
     return this.usersService.deleteUser(id);
   }
+
+  @Patch(':id/unlock')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.MANAGER)
+  async unlockPasswordLogin(
+    @CurrentUser() currentUser: { userId: string; role: Role },
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    await this.usersService.unlockPasswordLogin(currentUser.userId, currentUser.role, id);
+    return { message: 'Mở khóa tài khoản thành công!' };
+  }
+
 }

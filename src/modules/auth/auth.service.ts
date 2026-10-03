@@ -24,6 +24,7 @@ import { UserSession } from './entities/user-session.entity.js';
 import { OtpService } from './otp.service.js';
 import { normalizePhone } from '../../common/redis/rate-limit.constants.js';
 import { OtpPurpose } from '../../common/redis/otp.constants.js';
+import { LoginSecurityService } from '../../common/redis/login-security.service.js';
 import { EmailService } from '../email/email.service.js';
 import { EsmsService } from '../../common/esms/esms.service.js';
 
@@ -43,6 +44,8 @@ export class AuthService {
     private readonly esmsService: EsmsService,
     @Optional()
     private readonly otpService?: OtpService,
+    @Optional()
+    private readonly loginSecurityService?: LoginSecurityService,
   ) {}
 
   //Hàm gửi OTP (Lưu SHA-256 hash vào Redis với TTL 5 phút)
@@ -62,16 +65,29 @@ export class AuthService {
     }
 
       if (sendOtpDto.purpose === OtpPurpose.LOGIN && !existingUser) {
-        throw new UnauthorizedException('Tài khoản không tồn tại trong hệ thống!');
-      }
+      throw new UnauthorizedException('Tài khoản không tồn tại trong hệ thống!');
+    }
+    if (sendOtpDto.purpose === OtpPurpose.LOGIN && existingUser && existingUser.isLoginLocked) {
+      throw new UnauthorizedException('Vui lòng liên hệ quản lý');
+    }
 
-      if (
-        (sendOtpDto.purpose === OtpPurpose.RESET_PASSWORD ||
-          sendOtpDto.purpose === OtpPurpose.CHANGE_PASSWORD) &&
-        !existingUser
-      ) {
+    if (
+      sendOtpDto.purpose === OtpPurpose.RESET_PASSWORD &&
+      !existingUser
+    ) {
+      return {
+        message: 'Nếu số điện thoại hợp lệ, mã OTP đã được gửi',
+        phoneNumber: sendOtpDto.phoneNumber,
+        expiresIn: '5 phút',
+      };
+    }
+
+    if (
+      sendOtpDto.purpose === OtpPurpose.CHANGE_PASSWORD &&
+      !existingUser
+    ) {
         throw new UnauthorizedException('Tài khoản không tồn tại trong hệ thống!');;
-      }
+    }
 
       let otp: string | undefined;
       if (this.otpService) {
@@ -136,6 +152,25 @@ export class AuthService {
         throw new UnauthorizedException(
           'Tài khoản của bạn đã bị khóa hoặc ngừng hoạt động. Vui lòng liên hệ quản trị viên!',
         );
+      }
+
+      if (user.isLoginLocked) {
+        throw new UnauthorizedException({
+          code: 'LOGIN_PERMANENTLY_LOCKED',
+          message: 'Vui lòng liên hệ quản lý',
+        });
+      }
+
+      if (this.loginSecurityService) {
+        const lockTtl = await this.loginSecurityService.getTemporaryLockTtl(user.userId);
+        if (lockTtl > 0) {
+          throw new UnauthorizedException({
+            code: 'LOGIN_TEMPORARILY_LOCKED',
+            message: `Tài khoản tạm thời bị khóa. Vui lòng thử lại sau ${lockTtl} giây.`,
+            retryAfterSeconds: lockTtl,
+          });
+        }
+        await this.loginSecurityService.clear(user.userId);
       }
 
       const accessPayload = {
@@ -319,13 +354,50 @@ export class AuthService {
       true,
     );
 
+    if (user) {
+      if (user.isLoginLocked) {
+        throw new UnauthorizedException({
+          code: 'LOGIN_PERMANENTLY_LOCKED',
+          message: 'Vui lòng liên hệ quản lý',
+        });
+      }
+
+      if (this.loginSecurityService) {
+        const lockTtl = await this.loginSecurityService.getTemporaryLockTtl(user.userId);
+        if (lockTtl > 0) {
+          throw new UnauthorizedException({
+            code: 'LOGIN_TEMPORARILY_LOCKED',
+            message: `Tài khoản tạm thời bị khóa. Vui lòng thử lại sau ${lockTtl} giây.`,
+            retryAfterSeconds: lockTtl,
+          });
+        }
+      }
+    }
+
     const hashToCompare = user?.passwordHash || DUMMY_HASH;
     const isPasswordValid = await bcrypt.compare(
       loginDto.password,
       hashToCompare,
     );
 
-    if (!user || !isPasswordValid) {
+    if (!user) {
+      throw new UnauthorizedException(
+        'Số điện thoại hoặc mật khẩu không đúng!',
+      );
+    }
+
+    if (!isPasswordValid) {
+      if (this.loginSecurityService) {
+        const attempts = await this.loginSecurityService.recordFailure(user.userId);
+        if (attempts === 3) {
+          await this.loginSecurityService.createTemporaryLock(user.userId, 30);
+        } else if (attempts === 5) {
+          await this.loginSecurityService.createTemporaryLock(user.userId, 60);
+        } else if (attempts === 10) {
+          await this.userService.setLoginLocked(user.userId, true);
+          await this.loginSecurityService.clear(user.userId);
+        }
+      }
       throw new UnauthorizedException(
         'Số điện thoại hoặc mật khẩu không đúng!',
       );
@@ -335,6 +407,10 @@ export class AuthService {
       throw new UnauthorizedException(
         'Tài khoản của bạn đã bị khóa hoặc ngừng hoạt động. Vui lòng liên hệ quản trị viên!',
       );
+    }
+
+    if (this.loginSecurityService) {
+      await this.loginSecurityService.clear(user.userId);
     }
 
     const accessPayload = {
@@ -609,6 +685,12 @@ export class AuthService {
           revokeReason: 'PASSWORD_RESET',
         },
       );
+
+      // Unlock account
+      await this.userService.setLoginLocked(user.userId, false, manager);
+      if (this.loginSecurityService) {
+        await this.loginSecurityService.clear(user.userId);
+      }
 
       return {
         message: 'Đặt lại mật khẩu thành công. Vui lòng đăng nhập bằng mật khẩu mới.',
