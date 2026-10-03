@@ -72,7 +72,7 @@ export class PondsController {
 
   @Get(':id')
   async findPondById(
-    @Param('id', ParseUUIDPipe) pondId: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ): Promise<Pond> {
@@ -82,7 +82,7 @@ export class PondsController {
   @Roles(Role.ADMIN, Role.MANAGER)
   @Patch(':id')
   async updatePond(
-    @Param('id', ParseUUIDPipe) pondId: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() updatePondDto: UpdatePondDto,
@@ -102,7 +102,7 @@ export class PondsController {
   @Roles(Role.ADMIN, Role.MANAGER)
   @Delete(':id')
   async deletePond(
-    @Param('id', ParseUUIDPipe) pondId: string,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ): Promise<MessageOnlyResponse> {
@@ -113,9 +113,10 @@ export class PondsController {
   // 2. THRESHOLD CONFIG ENDPOINTS
   // ==========================================
 
+  @Roles(Role.ADMIN, Role.MANAGER)
   @Post(':pondId/thresholds')
   async createThreshold(
-    @Param('pondId', ParseUUIDPipe) pondId: string,
+    @Param('pondId', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: CreateThresholdConfigDto,
@@ -134,16 +135,17 @@ export class PondsController {
 
   @Get(':pondId/thresholds')
   async findThresholdsByPond(
-    @Param('pondId', ParseUUIDPipe) pondId: string,
+    @Param('pondId', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ): Promise<ThresholdResponse[]> {
     return this.pondsService.findThresholdsByPond(pondId, userId, role);
   }
 
+  @Roles(Role.ADMIN, Role.MANAGER)
   @Patch('thresholds/:configId')
   async updateThreshold(
-    @Param('configId', ParseUUIDPipe) configId: string,
+    @Param('configId', new ParseUUIDPipe({ version: '4' })) configId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: UpdateThresholdConfigDto,
@@ -160,9 +162,10 @@ export class PondsController {
     };
   }
 
+  @Roles(Role.ADMIN, Role.MANAGER)
   @Delete('thresholds/:configId')
   async deleteThreshold(
-    @Param('configId', ParseUUIDPipe) configId: string,
+    @Param('configId', new ParseUUIDPipe({ version: '4' })) configId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ): Promise<MessageOnlyResponse> {
@@ -175,7 +178,7 @@ export class PondsController {
 
   @Post(':pondId/manual-logs')
   async createManualLog(
-    @Param('pondId', ParseUUIDPipe) pondId: string,
+    @Param('pondId', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: CreateManualTestLogDto,
@@ -194,7 +197,7 @@ export class PondsController {
 
   @Get(':pondId/manual-logs')
   async findManualLogsByPond(
-    @Param('pondId', ParseUUIDPipe) pondId: string,
+    @Param('pondId', new ParseUUIDPipe({ version: '4' })) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Query() query: FindManualTestLogsQueryDto,
@@ -204,7 +207,7 @@ export class PondsController {
 
   @Get('manual-logs/:logId')
   async findManualLogById(
-    @Param('logId', ParseUUIDPipe) logId: string,
+    @Param('logId', new ParseUUIDPipe({ version: '4' })) logId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ): Promise<ManualTestLog> {
@@ -213,7 +216,7 @@ export class PondsController {
 
   @Patch('manual-logs/:logId')
   async updateManualLog(
-    @Param('logId', ParseUUIDPipe) logId: string,
+    @Param('logId', new ParseUUIDPipe({ version: '4' })) logId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: UpdateManualTestLogDto,
@@ -232,7 +235,7 @@ export class PondsController {
 
   @Delete('manual-logs/:logId')
   async deleteManualLog(
-    @Param('logId', ParseUUIDPipe) logId: string,
+    @Param('logId', new ParseUUIDPipe({ version: '4' })) logId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ): Promise<MessageOnlyResponse> {

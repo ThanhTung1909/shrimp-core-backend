@@ -11,6 +11,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { Request } from 'express';
 import { AuthService } from './auth.service.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
@@ -24,6 +25,7 @@ import { SendOtpDto } from './dto/send-otp.dto.js';
 import { VerifyOtpDto } from './dto/verify-otp.dto.js';
 import { LogoutDto } from './dto/logout.dto.js';
 import { UsersService } from '../users/users.service.js';
+import { User } from '../users/entities/user.entity.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { AllowMustChangePassword } from '../../common/decorators/allow-must-change-password.decorator.js';
 import { RateLimitService } from '../../common/redis/rate-limit.service.js';
@@ -37,6 +39,14 @@ import {
   getOtpSendPhoneKey,
   getOtpVerifyPhoneKey,
 } from '../../common/redis/rate-limit.constants.js';
+
+import { Public } from '../../common/decorators/public.decorator.js';
+
+import { Gender } from '../../common/enums/gender.enum.js';
+
+export interface AuthenticatedRequest extends Request {
+  user: Omit<User, 'passwordHash'>;
+}
 
 @Controller('auth')
 export class AuthController {
@@ -73,11 +83,17 @@ export class AuthController {
     }
   }
 
+  @Public()
   @Post('send-otp')
   async sendOtp(
     @Body() sendOtpDto: SendOtpDto,
     @Ip() ip?: string,
-  ) {
+  ): Promise<{
+    message: string;
+    phoneNumber: string;
+    otp?: string;
+    expiresIn: string;
+  }> {
     await this.applyRateLimit(
       getOtpSendPhoneKey(sendOtpDto.phoneNumber),
       RATE_LIMIT_CONFIG.OTP_SEND.PHONE_LIMIT,
@@ -91,8 +107,15 @@ export class AuthController {
     return this.authService.sendOtp(sendOtpDto);
   }
 
+  @Public()
   @Post('verify-otp')
-  async verifyOtp(@Body() verifyOtpDto: VerifyOtpDto) {
+  async verifyOtp(
+    @Body() verifyOtpDto: VerifyOtpDto,
+  ): Promise<{
+    message: string;
+    phoneNumber: string;
+    isValid: boolean;
+  }> {
     await this.applyRateLimit(
       getOtpVerifyPhoneKey(verifyOtpDto.phoneNumber),
       RATE_LIMIT_CONFIG.OTP_VERIFY.PHONE_LIMIT,
@@ -108,7 +131,14 @@ export class AuthController {
     @Body() registerDto: RegisterDto,
     @Ip() ip?: string,
     @Headers('user-agent') userAgent?: string,
-  ) {
+  ): Promise<{
+    message: string;
+    userId: string;
+    fullName: string;
+    phoneNumber: string;
+    email: string | null;
+    role: Role;
+  }> {
     await this.applyRateLimit(
       getRegisterIpKey(ip),
       RATE_LIMIT_CONFIG.REGISTER.IP_LIMIT,
@@ -117,12 +147,22 @@ export class AuthController {
     return this.authService.register(registerDto, userAgent);
   }
 
+  @Public()
   @Post('login')
   async login(
     @Body() loginDto: LoginDto,
     @Ip() ip?: string,
     @Headers('user-agent') userAgent?: string,
-  ) {
+  ): Promise<{
+    userId: string;
+    fullName: string;
+    phoneNumber: string;
+    role: Role;
+    tokenVersion: number;
+    mustChangePassword: boolean;
+    accessToken: string;
+    refreshToken: string;
+  }> {
     await this.applyRateLimit(
       getLoginIpKey(ip),
       RATE_LIMIT_CONFIG.LOGIN.IP_LIMIT,
@@ -136,11 +176,15 @@ export class AuthController {
     return this.authService.login(loginDto, userAgent);
   }
 
+  @Public()
   @Post('refresh')
   async refreshToken(
     @Body() refreshTokenDto: RefreshTokenDto,
     @Ip() ip?: string,
-  ) {
+  ): Promise<{
+    accessToken: string;
+    refreshToken: string;
+  }> {
     await this.applyRateLimit(
       getRefreshIpKey(ip),
       RATE_LIMIT_CONFIG.REFRESH.IP_LIMIT,
@@ -152,7 +196,18 @@ export class AuthController {
   @Get('me')
   @UseGuards(JwtAuthGuard)
   @AllowMustChangePassword()
-  async me(@Req() req: any) {
+  async me(@Req() req: AuthenticatedRequest): Promise<{
+    userId: string;
+    fullName: string;
+    phoneNumber: string;
+    email: string | null;
+    gender: Gender | null;
+    dateOfBirth: Date | string | null;
+    role: Role;
+    isActive: boolean;
+    mustChangePassword: boolean;
+    tokenVersion: number;
+  }> {
     const user = req.user;
     return {
       userId: user.userId,
@@ -174,7 +229,14 @@ export class AuthController {
   async changePassword(
     @CurrentUser('userId') userId: string,
     @Body() changePasswordDto: ChangePasswordDto,
-  ) {
+  ): Promise<{
+    message: string;
+    userId: string;
+    tokenVersion: number;
+    mustChangePassword: boolean;
+    accessToken: string;
+    refreshToken: string;
+  }> {
     return this.authService.changePassword(
       userId,
       changePasswordDto,
@@ -187,14 +249,14 @@ export class AuthController {
   async logout(
     @CurrentUser('userId') userId: string,
     @Body() logoutDto: LogoutDto,
-  ) {
+  ): Promise<{ message: string }> {
     return this.authService.logout(userId, logoutDto.refreshToken);
   }
 
   @Post('logout-all')
   @UseGuards(JwtAuthGuard)
   @AllowMustChangePassword()
-  async logoutAll(@CurrentUser('userId') userId: string) {
+  async logoutAll(@CurrentUser('userId') userId: string): Promise<{ message: string }> {
     return this.authService.logoutAll(userId);
   }
 }

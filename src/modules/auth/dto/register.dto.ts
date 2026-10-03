@@ -1,4 +1,4 @@
-import { IsEmail, IsEnum, IsNotEmpty, IsString } from 'class-validator';
+import { IsEmail, IsEnum, IsNotEmpty, IsString, Matches } from 'class-validator';
 import { Role } from '../../../common/enums/role.enum.js';
 
 export class RegisterDto {
@@ -8,6 +8,9 @@ export class RegisterDto {
 
   @IsString({ message: 'Số điện thoại phải là chuỗi ký tự!' })
   @IsNotEmpty({ message: 'Số điện thoại không được để trống!' })
+  @Matches(/^[0-9]{10,11}$/, {
+    message: 'Số điện thoại không hợp lệ (phải gồm 10-11 chữ số)!',
+  })
   phoneNumber: string;
 
   @IsNotEmpty({ message: 'Email không được để trống!' })
