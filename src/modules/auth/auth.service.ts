@@ -60,10 +60,17 @@ export class AuthService {
     const existingUser = sendOtpDto.phoneNumber
       ? await this.userService.findByPhoneNumber(sendOtpDto.phoneNumber)
       : await this.userService.findByEmail(sendOtpDto.email!);
-    if (existingUser) {
-      throw new ConflictException(
-        'Số điện thoại này đã được đăng ký trong hệ thống!',
-      );
+
+    const purpose = sendOtpDto.purpose || 'REGISTER';
+
+    if (purpose === 'REGISTER') {
+      if (existingUser) {
+        throw new ConflictException('Số điện thoại hoặc email này đã được đăng ký trong hệ thống!');
+      }
+    } else if (purpose === 'LOGIN' || purpose === 'RESET_PASSWORD') {
+      if (!existingUser) {
+        throw new UnauthorizedException('Tài khoản không tồn tại trong hệ thống!');
+      }
     }
 
     let otp: string | undefined;
@@ -79,7 +86,22 @@ export class AuthService {
       otp = '123456';
     }
 
-    return {
+    
+      if (sendOtpDto.email && otp) {
+        try {
+          await this.emailService.sendOtpEmail(sendOtpDto.email, otp);
+        } catch (error) {
+          throw new InternalServerErrorException(
+            'Không thể gửi email mã xác thực. Vui lòng thử lại sau!',
+          );
+        }
+      }
+
+      console.log(
+        `[OTP] Gửi thành công; channel=${sendOtpDto.email ? 'email' : 'phone'}; purpose=${purpose}; identifier=${identifier}; otp=${otp}`,
+      );
+
+      return {
       message: 'Mã OTP đã được gửi thành công!',
       phoneNumber: sendOtpDto.phoneNumber,
       ...(process.env.NODE_ENV === 'production' ? {} : { otp }),
