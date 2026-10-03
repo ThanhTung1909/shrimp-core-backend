@@ -1,4 +1,4 @@
-import { IsDateString, IsInt, IsOptional, Min } from 'class-validator';
+import { IsDateString, IsInt, IsOptional, Max, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class FindManualTestLogsQueryDto {
@@ -12,6 +12,7 @@ export class FindManualTestLogsQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(100, { message: 'Số lượng tối đa mỗi trang là 100!' })
   limit?: number = 10;
 
   @IsOptional()

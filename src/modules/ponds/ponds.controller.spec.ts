@@ -27,10 +27,13 @@ describe('PondsController authorization metadata', () => {
     controller.createPond,
     controller.updatePond,
     controller.deletePond,
+    controller.createThreshold,
+    controller.updateThreshold,
+    controller.deleteThreshold,
   ];
 
   it.each(pondManagementHandlers)(
-    'Pond mutation yêu cầu chính xác ADMIN và MANAGER',
+    'Pond và Threshold mutation yêu cầu chính xác ADMIN và MANAGER',
     (handler) => {
       expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([
         Role.ADMIN,
@@ -40,7 +43,7 @@ describe('PondsController authorization metadata', () => {
   );
 
   it.each(pondManagementHandlers)(
-    'ADMIN được phép quản lý pond qua RolesGuard superuser behavior',
+    'ADMIN được phép quản lý pond và thresholds qua RolesGuard superuser behavior',
     (handler) => {
       expect(rolesGuard.canActivate(createContext(handler, Role.ADMIN))).toBe(
         true,
@@ -49,7 +52,7 @@ describe('PondsController authorization metadata', () => {
   );
 
   it.each(pondManagementHandlers)(
-    'MANAGER được phép quản lý pond',
+    'MANAGER được phép quản lý pond và thresholds',
     (handler) => {
       expect(rolesGuard.canActivate(createContext(handler, Role.MANAGER))).toBe(
         true,
@@ -58,7 +61,7 @@ describe('PondsController authorization metadata', () => {
   );
 
   it.each(pondManagementHandlers)(
-    'FARMER bị chặn khi quản lý pond',
+    'FARMER bị chặn khi quản lý pond và thresholds',
     (handler) => {
       expect(() =>
         rolesGuard.canActivate(createContext(handler, Role.FARMER)),
@@ -66,8 +69,8 @@ describe('PondsController authorization metadata', () => {
     },
   );
 
-  it.each([controller.findAllPonds, controller.findPondById])(
-    'GET pond không bị khóa bằng role decorator',
+  it.each([controller.findAllPonds, controller.findPondById, controller.findThresholdsByPond])(
+    'GET pond và thresholds không bị khóa bằng role decorator',
     (handler) => {
       expect(rolesGuard.canActivate(createContext(handler, Role.FARMER))).toBe(
         true,

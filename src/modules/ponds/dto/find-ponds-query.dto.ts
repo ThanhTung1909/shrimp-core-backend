@@ -4,6 +4,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -20,6 +21,7 @@ export class FindPondsQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(100, { message: 'Số lượng tối đa mỗi trang là 100!' })
   limit?: number = 10;
 
   @IsOptional()
@@ -32,6 +34,6 @@ export class FindPondsQueryDto {
 
   // Quản trị viên có thể lọc theo userId
   @IsOptional()
-  @IsString()
+  @IsUUID('4', { message: 'userId phải là chuỗi UUID v4 hợp lệ!' })
   userId?: string;
 }

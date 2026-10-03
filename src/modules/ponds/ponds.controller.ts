@@ -113,6 +113,7 @@ export class PondsController {
   // 2. THRESHOLD CONFIG ENDPOINTS
   // ==========================================
 
+  @Roles(Role.ADMIN, Role.MANAGER)
   @Post(':pondId/thresholds')
   async createThreshold(
     @Param('pondId', new ParseUUIDPipe({ version: '4' })) pondId: string,
@@ -141,6 +142,7 @@ export class PondsController {
     return this.pondsService.findThresholdsByPond(pondId, userId, role);
   }
 
+  @Roles(Role.ADMIN, Role.MANAGER)
   @Patch('thresholds/:configId')
   async updateThreshold(
     @Param('configId', new ParseUUIDPipe({ version: '4' })) configId: string,
@@ -160,6 +162,7 @@ export class PondsController {
     };
   }
 
+  @Roles(Role.ADMIN, Role.MANAGER)
   @Delete('thresholds/:configId')
   async deleteThreshold(
     @Param('configId', new ParseUUIDPipe({ version: '4' })) configId: string,

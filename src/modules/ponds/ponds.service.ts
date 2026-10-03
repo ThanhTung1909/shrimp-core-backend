@@ -226,6 +226,16 @@ export class PondsService {
   ): Promise<ThresholdConfig> {
     await this.findPondById(pondId, currentUserId, currentUserRole);
 
+    const existingConfig = await this.thresholdRepo.findOne({
+      where: { pondId, metricName: dto.metricName },
+    });
+
+    if (existingConfig) {
+      throw new ConflictException(
+        `Cấu hình ngưỡng cho thông số "${dto.metricName}" đã tồn tại trong ao nuôi này!`,
+      );
+    }
+
     if (dto.minValue > dto.maxValue) {
       throw new BadRequestException(
         'Giá trị tối thiểu (minValue) không được lớn hơn giá trị tối đa (maxValue)!',

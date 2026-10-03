@@ -354,4 +354,26 @@ describe('PondsService', () => {
       );
     });
   });
+
+  describe('createThresholdConfig', () => {
+    it('tạo threshold với metricName đã tồn tại trên ao -> ConflictException', async () => {
+      const mockPond = { pondId: 'pond-1', userId: 'farmer-1' };
+      mockPondRepo.findOne.mockResolvedValue(mockPond);
+
+      mockThresholdRepo.findOne = vi.fn().mockResolvedValue({
+        configId: 'config-1',
+        pondId: 'pond-1',
+        metricName: 'pH',
+      });
+
+      await expect(
+        service.createThresholdConfig(
+          'pond-1',
+          { metricName: 'pH', minValue: 7.0, maxValue: 8.5 },
+          'farmer-1',
+          Role.MANAGER,
+        ),
+      ).rejects.toThrow(ConflictException);
+    });
+  });
 });
