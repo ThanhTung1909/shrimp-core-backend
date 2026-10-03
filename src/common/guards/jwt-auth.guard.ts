@@ -1,4 +1,4 @@
-import { ExecutionContext, Injectable } from '@nestjs/common';
+import { ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
 import { Observable } from 'rxjs';
@@ -24,4 +24,17 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
 
     return super.canActivate(context);
   }
-}
+
+  override handleRequest<TUser = any>(err: any, user: any, info: any): TUser {
+    if (err || !user) {
+      throw (
+        err ||
+        new UnauthorizedException(
+          'Phiên làm việc không hợp lệ hoặc đã hết hạn!',
+        )
+      );
+    }
+    return user;
+  }
+}
+
