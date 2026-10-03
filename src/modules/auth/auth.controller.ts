@@ -24,7 +24,6 @@ import { RegisterDto } from './dto/register.dto.js';
 import { SendOtpDto } from './dto/send-otp.dto.js';
 import { VerifyOtpDto } from './dto/verify-otp.dto.js';
 import { LogoutDto } from './dto/logout.dto.js';
-import { ResetPasswordDto } from './dto/reset-password.dto.js';
 import { UsersService } from '../users/users.service.js';
 import { User } from '../users/entities/user.entity.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
@@ -91,14 +90,12 @@ export class AuthController {
     @Ip() ip?: string,
   ): Promise<{
     message: string;
-    phoneNumber?: string;
-    email?: string;
+    phoneNumber: string;
     otp?: string;
     expiresIn: string;
   }> {
-    const identifier = sendOtpDto.phoneNumber || sendOtpDto.email;
     await this.applyRateLimit(
-      getOtpSendPhoneKey(identifier),
+      getOtpSendPhoneKey(sendOtpDto.phoneNumber),
       RATE_LIMIT_CONFIG.OTP_SEND.PHONE_LIMIT,
       RATE_LIMIT_CONFIG.OTP_SEND.PHONE_WINDOW,
     );
@@ -116,13 +113,11 @@ export class AuthController {
     @Body() verifyOtpDto: VerifyOtpDto,
   ): Promise<{
     message: string;
-    phoneNumber?: string;
-    email?: string;
+    phoneNumber: string;
     isValid: boolean;
   }> {
-    const identifier = verifyOtpDto.phoneNumber || verifyOtpDto.email;
     await this.applyRateLimit(
-      getOtpVerifyPhoneKey(identifier),
+      getOtpVerifyPhoneKey(verifyOtpDto.phoneNumber),
       RATE_LIMIT_CONFIG.OTP_VERIFY.PHONE_LIMIT,
       RATE_LIMIT_CONFIG.OTP_VERIFY.PHONE_WINDOW,
     );
@@ -173,15 +168,12 @@ export class AuthController {
       RATE_LIMIT_CONFIG.LOGIN.IP_LIMIT,
       RATE_LIMIT_CONFIG.LOGIN.IP_WINDOW,
     );
-    const phoneLimitKey = getLoginPhoneKey(loginDto.phoneNumber);
     await this.applyRateLimit(
-      phoneLimitKey,
+      getLoginPhoneKey(loginDto.phoneNumber),
       RATE_LIMIT_CONFIG.LOGIN.PHONE_LIMIT,
       RATE_LIMIT_CONFIG.LOGIN.PHONE_WINDOW,
     );
-    const result = await this.authService.login(loginDto, userAgent);
-    await this.rateLimitService?.resetLimit(phoneLimitKey);
-    return result;
+    return this.authService.login(loginDto, userAgent);
   }
 
   @Public()
@@ -267,36 +259,4 @@ export class AuthController {
   async logoutAll(@CurrentUser('userId') userId: string): Promise<{ message: string }> {
     return this.authService.logoutAll(userId);
   }
-
-  @Public()
-  @Post(['reset-password', 'forgot-password'])
-  async resetPassword(
-    @Body() resetPasswordDto: ResetPasswordDto,
-  ): Promise<{ message: string }> {
-    // Optionally apply rate limiting here
-    return this.authService.resetPassword(resetPasswordDto);
-  }
-
-  @Public()
-  @Post('login-with-otp')
-  async loginWithOtp(
-    @Body() verifyOtpDto: VerifyOtpDto,
-    @Ip() ip?: string,
-    @Headers('user-agent') userAgent?: string,
-  ): Promise<{
-    userId: string;
-    fullName: string;
-    accessToken: string;
-    refreshToken: string;
-  }> {
-    const identifier = verifyOtpDto.phoneNumber || verifyOtpDto.email;
-    await this.applyRateLimit(
-      getOtpVerifyPhoneKey(identifier),
-      RATE_LIMIT_CONFIG.OTP_VERIFY.PHONE_LIMIT,
-      RATE_LIMIT_CONFIG.OTP_VERIFY.PHONE_WINDOW,
-    );
-    const result = await this.authService.loginWithOtp(verifyOtpDto, userAgent);
-    return result;
-  }
-
 }

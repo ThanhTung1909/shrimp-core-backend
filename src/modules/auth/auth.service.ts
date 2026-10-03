@@ -18,13 +18,11 @@ import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
 import { SendOtpDto } from './dto/send-otp.dto.js';
 import { VerifyOtpDto } from './dto/verify-otp.dto.js';
-import { ResetPasswordDto } from './dto/reset-password.dto.js';
 import { Role } from '../../common/enums/role.enum.js';
 import { UserSession } from './entities/user-session.entity.js';
 import { OtpService } from './otp.service.js';
 import { normalizePhone } from '../../common/redis/rate-limit.constants.js';
 import { EmailService } from '../email/email.service.js';
-import { LoginSecurityService } from '../../common/redis/login-security.service.js';
 
 const DUMMY_HASH =
   '$2b$10$e8N8y2D2.f6Zf2g8H6J7K.1234567890abcdefghijklmnopqrstuv';
@@ -41,41 +39,29 @@ export class AuthService {
     private readonly emailService: EmailService,
     @Optional()
     private readonly otpService?: OtpService,
-    @Optional()
-    private readonly loginSecurityService?: LoginSecurityService,
   ) {}
 
   //Hàm gửi OTP (Lưu SHA-256 hash vào Redis với TTL 5 phút)
   async sendOtp(sendOtpDto: SendOtpDto): Promise<{
     message: string;
-    phoneNumber?: string;
-    email?: string;
+    phoneNumber: string;
     otp?: string;
     expiresIn: string;
   }> {
-    const identifier = sendOtpDto.phoneNumber || sendOtpDto.email;
-    if (!identifier) {
-      throw new BadRequestException('Vui lòng cung cấp email hoặc số điện thoại!');
-    }
-    const existingUser = sendOtpDto.phoneNumber
-      ? await this.userService.findByPhoneNumber(sendOtpDto.phoneNumber)
-      : await this.userService.findByEmail(sendOtpDto.email!);
-
-    const purpose = sendOtpDto.purpose || 'REGISTER';
-
-    if (purpose === 'REGISTER') {
-      if (existingUser) {
-        throw new ConflictException('Số điện thoại hoặc email này đã được đăng ký trong hệ thống!');
-      }
-    } else if (purpose === 'LOGIN' || purpose === 'RESET_PASSWORD') {
-      if (!existingUser) {
-        throw new UnauthorizedException('Tài khoản không tồn tại trong hệ thống!');
-      }
+    const existingUser = await this.userService.findByPhoneNumber(
+      sendOtpDto.phoneNumber,
+    );
+    if (existingUser) {
+      throw new ConflictException(
+        'Số điện thoại này đã được đăng ký trong hệ thống!',
+      );
     }
 
     let otp: string | undefined;
     if (this.otpService) {
-      const result = await this.otpService.createAndSaveOtp(identifier);
+      const result = await this.otpService.createAndSaveOtp(
+        sendOtpDto.phoneNumber,
+      );
       otp = result.otp;
     } else {
       if (process.env.NODE_ENV === 'production') {
@@ -86,22 +72,7 @@ export class AuthService {
       otp = '123456';
     }
 
-    
-      if (sendOtpDto.email && otp) {
-        try {
-          await this.emailService.sendOtpEmail(sendOtpDto.email, otp);
-        } catch (error) {
-          throw new InternalServerErrorException(
-            'Không thể gửi email mã xác thực. Vui lòng thử lại sau!',
-          );
-        }
-      }
-
-      console.log(
-        `[OTP] Gửi thành công; channel=${sendOtpDto.email ? 'email' : 'phone'}; purpose=${purpose}; identifier=${identifier}; otp=${otp}`,
-      );
-
-      return {
+    return {
       message: 'Mã OTP đã được gửi thành công!',
       phoneNumber: sendOtpDto.phoneNumber,
       ...(process.env.NODE_ENV === 'production' ? {} : { otp }),
@@ -112,16 +83,14 @@ export class AuthService {
   //Hàm xác thực OTP (Xác thực atomic bằng Redis Lua Script)
   async verifyOtp(verifyOtpDto: VerifyOtpDto): Promise<{
     message: string;
-    phoneNumber?: string;
-    email?: string;
+    phoneNumber: string;
     isValid: boolean;
   }> {
     if (this.otpService) {
-      const identifier = verifyOtpDto.phoneNumber || verifyOtpDto.email;
-      if (!identifier) {
-        throw new BadRequestException('Vui lòng cung cấp email hoặc số điện thoại!');
-      }
-      await this.otpService.verifyOtp(identifier, verifyOtpDto.otp);
+      await this.otpService.verifyOtp(
+        verifyOtpDto.phoneNumber,
+        verifyOtpDto.otp,
+      );
     } else {
       if (process.env.NODE_ENV === 'production') {
         throw new InternalServerErrorException(
@@ -131,7 +100,7 @@ export class AuthService {
       const MOCK_OTP = '123456';
       if (verifyOtpDto.otp !== MOCK_OTP) {
         throw new BadRequestException(
-          'Mã OTP không chính xác hoặc đã hết hạn! [MOCK]',
+          'Mã OTP không chính xác hoặc đã hết hạn!',
         );
       }
     }
@@ -715,169 +684,4 @@ export class AuthService {
       message: 'Đã đăng xuất khỏi tất cả thiết bị!',
     };
   }
-
-  async resetPassword(resetPasswordDto: ResetPasswordDto): Promise<{ message: string }> {
-    const identifier = resetPasswordDto.email || resetPasswordDto.phoneNumber;
-    if (!identifier) {
-      throw new BadRequestException('Vui lòng cung cấp email hoặc số điện thoại!');
-    }
-
-    if (this.otpService) {
-      // Validate OTP first
-      await this.otpService.verifyOtp(identifier, resetPasswordDto.otp);
-    } else {
-      if (process.env.NODE_ENV === 'production') {
-        throw new InternalServerErrorException('Dịch vụ OTP chưa sẵn sàng!');
-      }
-      if (resetPasswordDto.otp !== '123456') {
-        throw new BadRequestException('Mã OTP không chính xác hoặc đã hết hạn! [MOCK]');
-      }
-    }
-
-    let user;
-    if (resetPasswordDto.email) {
-      user = await this.userService.findByEmail(resetPasswordDto.email);
-    } else {
-      user = await this.userService.findByPhoneNumber(resetPasswordDto.phoneNumber!);
-    }
-
-    if (!user || !user.isActive) {
-      throw new UnauthorizedException('Tài khoản không tồn tại hoặc đã bị khóa!');
-    }
-
-    const newPasswordHash = await bcrypt.hash(resetPasswordDto.newPassword, 10);
-
-    await this.dataSource.transaction(async (manager) => {
-      // 1. Update password
-      await this.userService.updatePassword(user.userId, newPasswordHash, manager);
-
-      // 2. Increment token version to invalidate old JWTs (if relying on version)
-      await this.userService.incrementTokenVersion(user.userId, manager);
-
-      // 3. Revoke all sessions
-      await manager.update(
-        UserSession,
-        {
-          userId: user.userId,
-          revokedAt: IsNull(),
-        },
-        {
-          revokedAt: new Date(),
-          revokeReason: 'PASSWORD_RESET',
-        },
-      );
-    });
-
-    return {
-      message: 'Đặt lại mật khẩu thành công!',
-    };
-  }
-
-  async loginWithOtp(verifyOtpDto: VerifyOtpDto, deviceName?: string | null) {
-    const identifier = verifyOtpDto.phoneNumber || verifyOtpDto.email;
-    if (!identifier) {
-      throw new BadRequestException('Vui lòng cung cấp email hoặc số điện thoại!');
-    }
-
-    if (this.otpService) {
-      await this.otpService.verifyOtp(identifier, verifyOtpDto.otp);
-    } else {
-      if (process.env.NODE_ENV === 'production') {
-        throw new InternalServerErrorException('Dịch vụ OTP chưa sẵn sàng, vui lòng liên hệ quản trị viên!');
-      }
-      if (verifyOtpDto.otp !== '123456') {
-        throw new BadRequestException('Mã OTP không chính xác hoặc đã hết hạn! [MOCK]');
-      }
-    }
-
-    let user;
-    if (verifyOtpDto.phoneNumber) {
-      user = await this.userService.findByPhoneNumber(verifyOtpDto.phoneNumber);
-    } else if (verifyOtpDto.email) {
-      user = await this.userService.findByEmail(verifyOtpDto.email);
-    }
-
-    if (!user) {
-      throw new UnauthorizedException({
-        code: 'USER_NOT_FOUND',
-        message: 'Tài khoản không tồn tại!'
-      });
-    }
-
-    if (!user.isActive) {
-      throw new UnauthorizedException({
-        code: 'ACCOUNT_INACTIVE',
-        message: 'Tài khoản của bạn đã bị khóa hoặc ngừng hoạt động. Vui lòng liên hệ quản trị viên!'
-      });
-    }
-    
-    if (user.isLoginLocked) {
-      throw new UnauthorizedException({
-        code: 'LOGIN_PERMANENTLY_LOCKED',
-        message: 'Tài khoản đã bị khóa đăng nhập. Vui lòng khôi phục mật khẩu hoặc liên hệ quản trị viên!'
-      });
-    }
-
-    if (this.loginSecurityService) {
-      const lockTtl = await this.loginSecurityService.getTemporaryLockTtl(user.userId);
-      if (lockTtl > 0) {
-        throw new UnauthorizedException({
-          code: 'LOGIN_TEMPORARILY_LOCKED',
-          message: `Tài khoản tạm thời bị khóa. Vui lòng thử lại sau ${lockTtl} giây.`,
-          retryAfterSeconds: lockTtl
-        });
-      }
-    }
-
-    const accessPayload = {
-      sub: user.userId,
-      phoneNumber: user.phoneNumber,
-      tokenVersion: user.tokenVersion,
-      role: user.role,
-      type: 'access',
-    };
-
-    const tokenFamily = crypto.randomUUID();
-    const refreshPayload = {
-      sub: user.userId,
-      tokenVersion: user.tokenVersion,
-      role: user.role,
-      type: 'refresh',
-      jti: crypto.randomUUID(),
-    };
-
-    const accessToken = await this.jwtService.signAsync(accessPayload);
-    const refreshToken = await this.jwtService.signAsync(refreshPayload, {
-      secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
-      algorithm: 'HS256',
-      expiresIn: (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d') as any,
-    });
-
-    const decoded = this.jwtService.decode(refreshToken) as any;
-    if (!decoded || !decoded.exp) {
-      throw new UnauthorizedException('Refresh token không hợp lệ!');
-    }
-
-    const expiresAt = new Date(decoded.exp * 1000);
-    const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
-
-    const session = this.userSessionRepository.create({
-      userId: user.userId,
-      refreshTokenHash,
-      tokenFamily,
-      deviceName: deviceName || null,
-      expiresAt,
-    });
-
-    await this.userSessionRepository.save(session);
-    await this.loginSecurityService?.clear(user.userId);
-
-    return {
-      userId: user.userId,
-      fullName: user.fullName,
-      accessToken,
-      refreshToken,
-    };
-  }
-
 }

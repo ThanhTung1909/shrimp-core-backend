@@ -1,9 +1,7 @@
 import {
   ConflictException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
-  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from './entities/user.entity.js';
@@ -13,65 +11,13 @@ import { AdminUpdateUserDto } from './dto/admin-update-user.dto.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
 import { FindUsersQueryDto } from './dto/find-users-query.dto.js';
 import * as bcrypt from 'bcrypt';
-import { Role } from '../../common/enums/role.enum.js';
-import { LoginSecurityService } from '../../common/redis/login-security.service.js';
-import { RateLimitService } from '../../common/redis/rate-limit.service.js';
-import { getLoginPhoneKey } from '../../common/redis/rate-limit.constants.js';
 
 @Injectable()
 export class UsersService {
   constructor(
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
-    private readonly loginSecurityService?: LoginSecurityService,
-    @Optional()
-    private readonly rateLimitService?: RateLimitService,
   ) {}
-
-  private async clearLoginRestrictions(user: User): Promise<void> {
-    await Promise.all([
-      this.loginSecurityService?.clear(user.userId),
-      this.rateLimitService?.resetLimit(getLoginPhoneKey(user.phoneNumber)),
-    ]);
-  }
-
-  async setLoginLocked(
-    userId: string,
-    isLoginLocked: boolean,
-    manager?: EntityManager,
-  ): Promise<void> {
-    const repo = manager ? manager.getRepository(User) : this.usersRepository;
-    const result = await repo.update({ userId }, { isLoginLocked });
-    if (result.affected === 0) {
-      throw new NotFoundException('Không tìm thấy người dùng!');
-    }
-  }
-
-  async unlockPasswordLogin(
-    actorId: string,
-    actorRole: Role,
-    targetId: string,
-  ): Promise<{ message: string }> {
-    if (actorId === targetId) {
-      throw new ForbiddenException('Không thể tự mở khóa đăng nhập!');
-    }
-
-    const target = await this.findById(targetId);
-    if (!target) {
-      throw new NotFoundException('Không tìm thấy người dùng!');
-    }
-
-    const allowed =
-      actorRole === Role.ADMIN ||
-      (actorRole === Role.MANAGER && target.role === Role.FARMER);
-    if (!allowed) {
-      throw new ForbiddenException('Bạn không có quyền mở khóa tài khoản này!');
-    }
-
-    await this.setLoginLocked(targetId, false);
-    await this.clearLoginRestrictions(target);
-    return { message: 'Đã mở khóa đăng nhập thành công!' };
-  }
 
   // Loại bỏ passwordHash trước khi trả về client
   sanitizeUser(user: User): Omit<User, 'passwordHash'> {
@@ -367,7 +313,6 @@ export class UsersService {
     }
 
     let shouldInvalidateTokens = false;
-    let shouldClearLoginRestrictions = false;
 
     // Nếu thay đổi số điện thoại
     if (
@@ -434,26 +379,12 @@ export class UsersService {
       }
     }
 
-    if (
-      adminUpdateUserDto.isLoginLocked !== undefined &&
-      adminUpdateUserDto.isLoginLocked !== user.isLoginLocked
-    ) {
-      user.isLoginLocked = adminUpdateUserDto.isLoginLocked;
-
-      if (!adminUpdateUserDto.isLoginLocked) {
-        shouldClearLoginRestrictions = true;
-      }
-    }
-
     if (shouldInvalidateTokens) {
       user.tokenVersion = (user.tokenVersion || 0) + 1;
     }
 
     try {
       const savedUser = await this.usersRepository.save(user);
-      if (shouldClearLoginRestrictions) {
-        await this.clearLoginRestrictions(savedUser);
-      }
       return this.sanitizeUser(savedUser);
     } catch (error: any) {
       if (error?.code === '23505') {

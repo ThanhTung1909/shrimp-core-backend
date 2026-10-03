@@ -45,10 +45,6 @@ export class AdminUpdateUserDto {
   isActive?: boolean;
 
   @IsOptional()
-  @IsBoolean({ message: 'isLoginLocked must be a boolean!' })
-  isLoginLocked?: boolean;
-
-  @IsOptional()
   @IsBoolean({ message: 'mustChangePassword phải là boolean!' })
   mustChangePassword?: boolean;
 }

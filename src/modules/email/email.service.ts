@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+﻿import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import nodemailer, { type Transporter } from 'nodemailer';
 
@@ -65,30 +65,5 @@ AquaSense`;
     });
 
     this.logger.log(`Gửi email thông tin tài khoản thành công tới: ${email}`);
-  }
-
-  async sendOtpEmail(email: string, otp: string): Promise<void> {
-    const subject = 'Mã xác thực (OTP) AquaSense';
-    const text = `Xin chào,
-
-Mã xác thực của bạn là: ${otp}
-
-Mã xác thực này có hiệu lực trong 5 phút. Vui lòng không chia sẻ mã này cho bất kỳ ai.
-
-Nếu bạn không yêu cầu mã này, vui lòng bỏ qua email.
-
-Trân trọng,
-AquaSense`;
-
-    this.logger.log(`Đang gửi email mã OTP tới: ${email}`);
-
-    await this.transporter.sendMail({
-      from: `"AquaSense" <${this.emailUser || 'no-reply@aquasense.vn'}>`,
-      to: email,
-      subject,
-      text,
-    });
-
-    this.logger.log(`Gửi email mã OTP thành công tới: ${email}`);
   }
 }
