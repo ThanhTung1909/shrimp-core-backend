@@ -1,5 +1,12 @@
 import { normalizePhone } from './rate-limit.constants.js';
 
+export enum OtpPurpose {
+  REGISTER = 'REGISTER',
+  RESET_PASSWORD = 'RESET_PASSWORD',
+  CHANGE_PASSWORD = 'CHANGE_PASSWORD',
+  LOGIN = 'LOGIN',
+}
+
 /**
  * Cấu hình các hằng số bảo mật cho hệ thống OTP (One-Time Password) qua Redis.
  */
@@ -12,22 +19,22 @@ export const OTP_CONFIG = {
 /**
  * Khóa Redis lưu trữ SHA-256 hash của mã OTP.
  */
-export function getOtpCodeKey(phone: string): string {
-  return `otp:code:${normalizePhone(phone)}`;
+export function getOtpCodeKey(purpose: OtpPurpose, phone: string): string {
+  return `otp:${purpose}:code:${normalizePhone(phone)}`;
 }
 
 /**
  * Khóa Redis lưu trữ số lần nhập sai của OTP hiện tại.
  */
-export function getOtpAttemptsKey(phone: string): string {
-  return `otp:attempts:${normalizePhone(phone)}`;
+export function getOtpAttemptsKey(purpose: OtpPurpose, phone: string): string {
+  return `otp:${purpose}:attempts:${normalizePhone(phone)}`;
 }
 
 /**
  * Khóa Redis lưu trữ trạng thái đã xác thực thành công số điện thoại.
  */
-export function getOtpVerifiedKey(phone: string): string {
-  return `otp:verified:${normalizePhone(phone)}`;
+export function getOtpVerifiedKey(purpose: OtpPurpose, phone: string): string {
+  return `otp:${purpose}:verified:${normalizePhone(phone)}`;
 }
 
 // Aliases

@@ -7,6 +7,7 @@ import {
   getOtpCodeKey,
   getOtpAttemptsKey,
   getOtpVerifiedKey,
+  OtpPurpose,
 } from './otp.constants.js';
 
 @Injectable()
@@ -84,6 +85,7 @@ export class OtpService {
    * @param ttlSeconds Thời gian sống của OTP (mặc định 300s = 5 phút)
    */
   async createAndSaveOtp(
+    purpose: OtpPurpose,
     phone: string,
     ttlSeconds: number = OTP_CONFIG.TTL_SECONDS,
   ): Promise<{ otp: string; otpHash: string }> {
@@ -95,8 +97,8 @@ export class OtpService {
     const otp = this.generateOtp();
     const otpHash = this.hashOtp(otp);
 
-    const codeKey = getOtpCodeKey(normalized);
-    const attemptsKey = getOtpAttemptsKey(normalized);
+    const codeKey = getOtpCodeKey(purpose, normalized);
+    const attemptsKey = getOtpAttemptsKey(purpose, normalized);
 
     const client = this.redisService.getClient();
     if (!client) {
@@ -131,7 +133,7 @@ export class OtpService {
    * @param phone Số điện thoại
    * @param otp Mã OTP gồm 6 chữ số người dùng nhập
    */
-  async verifyOtp(phone: string, otp: string): Promise<boolean> {
+  async verifyOtp(purpose: OtpPurpose, phone: string, otp: string): Promise<boolean> {
     const normalized = normalizePhone(phone);
     if (!normalized) {
       throw new BadRequestException('Số điện thoại không hợp lệ!');
@@ -147,9 +149,9 @@ export class OtpService {
     }
 
     const inputHash = this.hashOtp(otp.trim());
-    const codeKey = getOtpCodeKey(normalized);
-    const attemptsKey = getOtpAttemptsKey(normalized);
-    const verifiedKey = getOtpVerifiedKey(normalized);
+    const codeKey = getOtpCodeKey(purpose, normalized);
+    const attemptsKey = getOtpAttemptsKey(purpose, normalized);
+    const verifiedKey = getOtpVerifiedKey(purpose, normalized);
 
     try {
       const result = (await client.eval(
@@ -184,10 +186,10 @@ export class OtpService {
   /**
    * Kiểm tra trạng thái số điện thoại đã được xác thực thành công trong vòng 10 phút qua.
    */
-  async isPhoneVerified(phone: string): Promise<boolean> {
+  async isPhoneVerified(purpose: OtpPurpose, phone: string): Promise<boolean> {
     const normalized = normalizePhone(phone);
     if (!normalized) return false;
-    const exists = await this.redisService.exists(getOtpVerifiedKey(normalized));
+    const exists = await this.redisService.exists(getOtpVerifiedKey(purpose, normalized));
     return exists > 0;
   }
 
@@ -195,7 +197,7 @@ export class OtpService {
    * Tiêu thụ (consume) marker xác thực OTP một cách nguyên tử bằng Redis Lua Script.
    * Đảm bảo chỉ duy nhất 1 request có thể tiêu thụ thành công marker này.
    */
-  async consumePhoneVerified(phone: string): Promise<boolean> {
+  async consumePhoneVerified(purpose: OtpPurpose, phone: string): Promise<boolean> {
     const normalized = normalizePhone(phone);
     if (!normalized) {
       return false;
@@ -206,7 +208,7 @@ export class OtpService {
       throw new Error('[OtpService] Redis client chưa được khởi tạo!');
     }
 
-    const verifiedKey = getOtpVerifiedKey(normalized);
+    const verifiedKey = getOtpVerifiedKey(purpose, normalized);
     const consumeScript = `
       local key = KEYS[1]
       local val = redis.call('GET', key)
@@ -234,25 +236,27 @@ export class OtpService {
    * Đặt marker xác thực cho số điện thoại (phục vụ testing hoặc workflow nâng cao).
    */
   async setPhoneVerified(
+    purpose: OtpPurpose,
     phone: string,
     ttlSeconds: number = OTP_CONFIG.VERIFIED_TTL_SECONDS,
   ): Promise<void> {
     const normalized = normalizePhone(phone);
     if (!normalized) return;
-    await this.redisService.set(getOtpVerifiedKey(normalized), '1', ttlSeconds);
+    await this.redisService.set(getOtpVerifiedKey(purpose, normalized), '1', ttlSeconds);
   }
 
   /**
    * Khôi phục lại marker xác thực OTP nếu quá trình đăng ký xảy ra lỗi hệ thống / DB.
    */
   async restorePhoneVerified(
+    purpose: OtpPurpose,
     phone: string,
     ttlSeconds: number = OTP_CONFIG.VERIFIED_TTL_SECONDS,
   ): Promise<void> {
     const normalized = normalizePhone(phone);
     if (!normalized) return;
 
-    const verifiedKey = getOtpVerifiedKey(normalized);
+    const verifiedKey = getOtpVerifiedKey(purpose, normalized);
     try {
       await this.redisService.set(verifiedKey, '1', ttlSeconds);
     } catch (error: any) {
@@ -265,17 +269,17 @@ export class OtpService {
   /**
    * Lấy số lần nhập sai hiện tại của OTP (phục vụ testing).
    */
-  async getOtpAttempts(phone: string): Promise<number> {
+  async getOtpAttempts(purpose: OtpPurpose, phone: string): Promise<number> {
     const normalized = normalizePhone(phone);
-    const val = await this.redisService.get(getOtpAttemptsKey(normalized));
+    const val = await this.redisService.get(getOtpAttemptsKey(purpose, normalized));
     return val !== null ? parseInt(val, 10) : 0;
   }
 
   /**
    * Lấy hash OTP đang lưu trong Redis (phục vụ testing).
    */
-  async getOtpCodeHash(phone: string): Promise<string | null> {
+  async getOtpCodeHash(purpose: OtpPurpose, phone: string): Promise<string | null> {
     const normalized = normalizePhone(phone);
-    return this.redisService.get(getOtpCodeKey(normalized));
+    return this.redisService.get(getOtpCodeKey(purpose, normalized));
   }
 }

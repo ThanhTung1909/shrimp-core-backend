@@ -1,4 +1,4 @@
-import {
+﻿import {
   BadRequestException,
   ConflictException,
   Injectable,
@@ -18,11 +18,14 @@ import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
 import { SendOtpDto } from './dto/send-otp.dto.js';
 import { VerifyOtpDto } from './dto/verify-otp.dto.js';
+import { ResetPasswordDto } from './dto/reset-password.dto.js';
 import { Role } from '../../common/enums/role.enum.js';
 import { UserSession } from './entities/user-session.entity.js';
 import { OtpService } from './otp.service.js';
 import { normalizePhone } from '../../common/redis/rate-limit.constants.js';
+import { OtpPurpose } from '../../common/redis/otp.constants.js';
 import { EmailService } from '../email/email.service.js';
+import { EsmsService } from '../../common/esms/esms.service.js';
 
 const DUMMY_HASH =
   '$2b$10$e8N8y2D2.f6Zf2g8H6J7K.1234567890abcdefghijklmnopqrstuv';
@@ -37,6 +40,7 @@ export class AuthService {
     private readonly userSessionRepository: Repository<UserSession>,
     private readonly dataSource: DataSource,
     private readonly emailService: EmailService,
+    private readonly esmsService: EsmsService,
     @Optional()
     private readonly otpService?: OtpService,
   ) {}
@@ -51,43 +55,56 @@ export class AuthService {
     const existingUser = await this.userService.findByPhoneNumber(
       sendOtpDto.phoneNumber,
     );
-    if (existingUser) {
+    if (sendOtpDto.purpose === OtpPurpose.REGISTER && existingUser) {
       throw new ConflictException(
         'Số điện thoại này đã được đăng ký trong hệ thống!',
       );
     }
 
-    let otp: string | undefined;
-    if (this.otpService) {
-      const result = await this.otpService.createAndSaveOtp(
-        sendOtpDto.phoneNumber,
-      );
-      otp = result.otp;
-    } else {
-      if (process.env.NODE_ENV === 'production') {
-        throw new InternalServerErrorException(
-          'Dịch vụ OTP chưa sẵn sàng, vui lòng liên hệ quản trị viên!',
-        );
+      if (sendOtpDto.purpose === OtpPurpose.LOGIN && !existingUser) {
+        throw new UnauthorizedException('Tài khoản không tồn tại trong hệ thống!');
       }
-      otp = '123456';
-    }
 
-    return {
-      message: 'Mã OTP đã được gửi thành công!',
-      phoneNumber: sendOtpDto.phoneNumber,
-      ...(process.env.NODE_ENV === 'production' ? {} : { otp }),
-      expiresIn: '5 phút',
+      if (
+        (sendOtpDto.purpose === OtpPurpose.RESET_PASSWORD ||
+          sendOtpDto.purpose === OtpPurpose.CHANGE_PASSWORD) &&
+        !existingUser
+      ) {
+        throw new UnauthorizedException('Tài khoản không tồn tại trong hệ thống!');;
+      }
+
+      let otp: string | undefined;
+      if (this.otpService) {
+        const result = await this.otpService.createAndSaveOtp(
+          sendOtpDto.purpose,
+          sendOtpDto.phoneNumber,
+        );
+        otp = result.otp;
+
+        // Gửi SMS qua eSMS
+        await this.esmsService.sendSMS(sendOtpDto.phoneNumber, otp);
+      } else {
+        if (process.env.NODE_ENV === 'production') {
+          throw new InternalServerErrorException(
+            'Dịch vụ OTP chưa sẵn sàng, vui lòng liên hệ quản trị viên!',
+          );
+        }
+        otp = '123456';
+      }
+
+      return {
+        message: 'Mã OTP đã được gửi thành công!',
+        phoneNumber: sendOtpDto.phoneNumber,
+        ...(process.env.NODE_ENV === 'production' ? {} : { otp }),
+        expiresIn: '5 phút',
     };
   }
 
   //Hàm xác thực OTP (Xác thực atomic bằng Redis Lua Script)
-  async verifyOtp(verifyOtpDto: VerifyOtpDto): Promise<{
-    message: string;
-    phoneNumber: string;
-    isValid: boolean;
-  }> {
+  async verifyOtp(verifyOtpDto: VerifyOtpDto, deviceName?: string | null): Promise<any> {
     if (this.otpService) {
       await this.otpService.verifyOtp(
+        verifyOtpDto.purpose,
         verifyOtpDto.phoneNumber,
         verifyOtpDto.otp,
       );
@@ -103,6 +120,79 @@ export class AuthService {
           'Mã OTP không chính xác hoặc đã hết hạn!',
         );
       }
+    }
+
+    if (verifyOtpDto.purpose === OtpPurpose.LOGIN) {
+      if (this.otpService) {
+        await this.otpService.consumePhoneVerified(verifyOtpDto.purpose, verifyOtpDto.phoneNumber);
+      }
+
+      const user = await this.userService.findByPhoneNumber(verifyOtpDto.phoneNumber, true);
+      if (!user) {
+        throw new UnauthorizedException('Tài khoản không tồn tại trong hệ thống!');
+      }
+
+      if (!user.isActive) {
+        throw new UnauthorizedException(
+          'Tài khoản của bạn đã bị khóa hoặc ngừng hoạt động. Vui lòng liên hệ quản trị viên!',
+        );
+      }
+
+      const accessPayload = {
+        sub: user.userId,
+        phoneNumber: user.phoneNumber,
+        tokenVersion: user.tokenVersion,
+        role: user.role,
+        type: 'access',
+      };
+
+      const refreshPayload = {
+        sub: user.userId,
+        tokenVersion: user.tokenVersion,
+        role: user.role,
+        type: 'refresh',
+        jti: crypto.randomUUID(),
+      };
+
+      const accessToken = await this.jwtService.signAsync(accessPayload);
+
+      const refreshToken = await this.jwtService.signAsync(refreshPayload, {
+        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+        algorithm: 'HS256',
+        expiresIn: (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d') as any,
+      });
+
+      const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+      const tokenFamily = crypto.randomUUID();
+      const decoded = this.jwtService.decode(refreshToken) as { exp?: number } | null;
+
+      if (!decoded?.exp || !Number.isFinite(decoded.exp)) {
+        throw new UnauthorizedException('Lỗi khởi tạo phiên đăng nhập!');
+      }
+
+      const expiresAt = new Date(decoded.exp * 1000);
+
+      const session = this.userSessionRepository.create({
+        userId: user.userId,
+        refreshTokenHash,
+        tokenFamily,
+        deviceName: deviceName || null,
+        expiresAt,
+      });
+
+      await this.userSessionRepository.save(session);
+
+      return {
+        message: 'Đăng nhập thành công!',
+        userId: user.userId,
+        fullName: user.fullName,
+        phoneNumber: user.phoneNumber,
+        role: user.role,
+        tokenVersion: user.tokenVersion,
+        mustChangePassword: user.mustChangePassword,
+        accessToken,
+        refreshToken,
+      };
     }
 
     return {
@@ -465,6 +555,67 @@ export class AuthService {
     }
   }
 
+  // Hàm đặt lại mật khẩu bằng OTP (Phase 7 - Change Password & Revoke All Sessions)
+  async resetPassword(resetPasswordDto: ResetPasswordDto) {
+    const user = await this.userService.findByPhoneNumber(
+      resetPasswordDto.phoneNumber,
+    );
+
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('Không tìm thấy người dùng!');
+    }
+
+    let isValid = false;
+    if (this.otpService) {
+      isValid = await this.otpService.consumePhoneVerified(
+        OtpPurpose.RESET_PASSWORD,
+        resetPasswordDto.phoneNumber,
+      );
+    } else {
+      isValid = true;
+    }
+
+    if (!isValid) {
+      throw new UnauthorizedException(
+        'Chưa xác thực OTP hoặc phiên xác thực đã hết hạn!',
+      );
+    }
+
+    const newPasswordHash = await bcrypt.hash(
+      resetPasswordDto.newPassword,
+      10,
+    );
+
+    return await this.dataSource.transaction(async (manager) => {
+      // 1. Đổi mật khẩu
+      await this.userService.updatePassword(
+        user.userId,
+        newPasswordHash,
+        manager,
+      );
+
+      // 2. Tăng tokenVersion để vô hiệu hoá tất cả token cũ
+      await this.userService.incrementTokenVersion(user.userId, manager);
+
+      // 3. Revoke toàn bộ session cũ
+      await manager.update(
+        UserSession,
+        {
+          userId: user.userId,
+          revokedAt: IsNull(),
+        },
+        {
+          revokedAt: new Date(),
+          revokeReason: 'PASSWORD_RESET',
+        },
+      );
+
+      return {
+        message: 'Đặt lại mật khẩu thành công. Vui lòng đăng nhập bằng mật khẩu mới.',
+      };
+    });
+  }
+
   // Hàm thay đổi mật khẩu (Phase 7 - Change Password & Revoke All Sessions)
   async changePassword(userId: string, changePasswordDto: ChangePasswordDto) {
     const user = await this.userService.findById(userId, true);
@@ -480,6 +631,21 @@ export class AuthService {
 
     if (!isPasswordValid) {
       throw new UnauthorizedException('Mật khẩu hiện tại không đúng!');
+    }
+
+    if (this.otpService) {
+      await this.otpService.verifyOtp(
+        OtpPurpose.CHANGE_PASSWORD,
+        user.phoneNumber,
+        changePasswordDto.otp,
+      );
+    } else {
+      const MOCK_OTP = '123456';
+      if (changePasswordDto.otp !== MOCK_OTP) {
+        throw new BadRequestException(
+          'Mã OTP không chính xác hoặc đã hết hạn!',
+        );
+      }
     }
 
     const refreshToken = changePasswordDto.refreshToken;

@@ -11,6 +11,7 @@ import { AuthModule } from './modules/auth/auth.module.js';
 import { RedisModule } from './common/redis/redis.module.js';
 
 import { ScheduleModule } from '@nestjs/schedule';
+import { EsmsModule } from './common/esms/esms.module.js';
 
 @Module({
   imports: [
@@ -40,6 +41,9 @@ import { ScheduleModule } from '@nestjs/schedule';
     // Module lưu trữ dữ liệu in-memory Redis (Global)
     RedisModule,
     
+    // Module SMS (Global)
+    EsmsModule,
+
     // Các modules thực thể cốt lõi
     UsersModule,
     PondsModule,

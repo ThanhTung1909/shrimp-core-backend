@@ -21,9 +21,11 @@ import { Roles } from '../../common/decorators/roles.decorator.js';
 import { Role } from '../../common/enums/role.enum.js';
 import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
+import { ResetPasswordDto } from './dto/reset-password.dto.js';
 import { SendOtpDto } from './dto/send-otp.dto.js';
 import { VerifyOtpDto } from './dto/verify-otp.dto.js';
 import { LogoutDto } from './dto/logout.dto.js';
+
 import { UsersService } from '../users/users.service.js';
 import { User } from '../users/entities/user.entity.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
@@ -111,17 +113,14 @@ export class AuthController {
   @Post('verify-otp')
   async verifyOtp(
     @Body() verifyOtpDto: VerifyOtpDto,
-  ): Promise<{
-    message: string;
-    phoneNumber: string;
-    isValid: boolean;
-  }> {
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<any> {
     await this.applyRateLimit(
       getOtpVerifyPhoneKey(verifyOtpDto.phoneNumber),
       RATE_LIMIT_CONFIG.OTP_VERIFY.PHONE_LIMIT,
       RATE_LIMIT_CONFIG.OTP_VERIFY.PHONE_WINDOW,
     );
-    return this.authService.verifyOtp(verifyOtpDto);
+    return this.authService.verifyOtp(verifyOtpDto, userAgent);
   }
 
   @Post('register')
@@ -176,6 +175,8 @@ export class AuthController {
     return this.authService.login(loginDto, userAgent);
   }
 
+
+
   @Public()
   @Post('refresh')
   async refreshToken(
@@ -191,6 +192,14 @@ export class AuthController {
       RATE_LIMIT_CONFIG.REFRESH.IP_WINDOW,
     );
     return this.authService.refreshToken(refreshTokenDto.refreshToken);
+  }
+
+  @Public()
+  @Post('reset-password')
+  async resetPassword(
+    @Body() resetPasswordDto: ResetPasswordDto,
+  ): Promise<{ message: string }> {
+    return this.authService.resetPassword(resetPasswordDto);
   }
 
   @Get('me')

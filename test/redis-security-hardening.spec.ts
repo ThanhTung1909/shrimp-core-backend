@@ -1,3 +1,4 @@
+import { OtpPurpose } from '../src/common/redis/otp.constants.js';
 ﻿import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { ConfigService } from '@nestjs/config';
 import { BadRequestException } from '@nestjs/common';
@@ -213,7 +214,7 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
   // Requirement 4: OTP TTL
   it('Requirement 4: OTP code key strictly enforces 300s TTL', async () => {
     const phone = getNextPhone();
-    await otpService.createAndSaveOtp(phone);
+    await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
     const codeKey = getOtpCodeKey(phone);
     const ttl = await redisService.ttl(codeKey);
@@ -224,7 +225,7 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
   // Requirement 5: OTP Hash
   it('Requirement 5: Redis stores SHA-256 hash of OTP, never plaintext', async () => {
     const phone = getNextPhone();
-    const { otp, otpHash } = await otpService.createAndSaveOtp(phone);
+    const { otp, otpHash } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
     const rawStored = await redisService.get(getOtpCodeKey(phone));
     expect(rawStored).not.toBeNull();
@@ -236,10 +237,10 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
   // Requirement 6: OTP Max Attempts
   it('Requirement 6: OTP invalidates and deletes after 5 wrong attempts; 6th attempt fails', async () => {
     const phone = getNextPhone();
-    const { otp } = await otpService.createAndSaveOtp(phone);
+    const { otp } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
     for (let i = 1; i <= 5; i++) {
-      await expect(otpService.verifyOtp(phone, '000000')).rejects.toThrow(BadRequestException);
+      await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, '000000')).rejects.toThrow(BadRequestException);
     }
 
     // Both code and attempts keys must be deleted
@@ -247,30 +248,30 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
     expect(await redisService.exists(getOtpAttemptsKey(phone))).toBe(0);
 
     // 6th attempt with CORRECT OTP must still fail
-    await expect(otpService.verifyOtp(phone, otp)).rejects.toThrow(BadRequestException);
+    await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp)).rejects.toThrow(BadRequestException);
   });
 
   // Requirement 7: OTP One-Time Use
   it('Requirement 7: OTP is strictly one-time use (second verification fails)', async () => {
     const phone = getNextPhone();
-    const { otp } = await otpService.createAndSaveOtp(phone);
+    const { otp } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
     // First verify succeeds
-    await expect(otpService.verifyOtp(phone, otp)).resolves.toBe(true);
+    await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp)).resolves.toBe(true);
 
     // Second verify with same OTP must fail
-    await expect(otpService.verifyOtp(phone, otp)).rejects.toThrow(BadRequestException);
+    await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp)).rejects.toThrow(BadRequestException);
   });
 
   // Requirement 8: Concurrent OTP Verify
   it('Requirement 8: Concurrent OTP verify requests allow exactly 1 success', async () => {
     const phone = getNextPhone();
-    const { otp } = await otpService.createAndSaveOtp(phone);
+    const { otp } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
     const results = await Promise.allSettled([
-      otpService.verifyOtp(phone, otp),
-      otpService.verifyOtp(phone, otp),
-      otpService.verifyOtp(phone, otp),
+      otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp),
+      otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp),
+      otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp),
     ]);
 
     const successes = results.filter((r) => r.status === 'fulfilled');
@@ -283,9 +284,9 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
   // Requirement 9: OTP Verified Marker TTL
   it('Requirement 9: OTP verified marker has TTL of 600s', async () => {
     const phone = getNextPhone();
-    const { otp } = await otpService.createAndSaveOtp(phone);
+    const { otp } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
-    await otpService.verifyOtp(phone, otp);
+    await otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp);
 
     const markerKey = getOtpVerifiedKey(phone);
     const ttl = await redisService.ttl(markerKey);
@@ -296,20 +297,20 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
   // Requirement 10: Atomic Consume Marker
   it('Requirement 10: Verified marker is atomically consumed and cannot be reused', async () => {
     const phone = getNextPhone();
-    await otpService.setPhoneVerified(phone);
+    await otpService.setPhoneVerified(OtpPurpose.REGISTER, phone);
 
-    const firstConsume = await otpService.consumePhoneVerified(phone);
+    const firstConsume = await otpService.consumePhoneVerified(OtpPurpose.REGISTER, phone);
     expect(firstConsume).toBe(true);
 
     // Second consume must return false
-    const secondConsume = await otpService.consumePhoneVerified(phone);
+    const secondConsume = await otpService.consumePhoneVerified(OtpPurpose.REGISTER, phone);
     expect(secondConsume).toBe(false);
   });
 
   // Requirement 11: Concurrent Register
   it('Requirement 11: Concurrent register calls with same OTP marker allow exactly 1 account creation', async () => {
     const phone = getNextPhone();
-    await otpService.setPhoneVerified(phone);
+    await otpService.setPhoneVerified(OtpPurpose.REGISTER, phone);
 
     const registerPayload = {
       fullName: 'Concurrent Hardening',
@@ -333,7 +334,7 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
   // Requirement 12: OTP Restore After Transaction Failure
   it('Requirement 12: OTP marker is restored if DB transaction fails, but NOT restored on success', async () => {
     const phoneFail = getNextPhone();
-    await otpService.setPhoneVerified(phoneFail);
+    await otpService.setPhoneVerified(OtpPurpose.REGISTER, phoneFail);
 
     // Mock failing transaction
     dataSource.transaction = vi.fn(async (cb: any) => {
@@ -353,7 +354,7 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
     ).rejects.toThrow('DB Constraint Violation');
 
     // Marker MUST be restored
-    expect(await otpService.isPhoneVerified(phoneFail)).toBe(true);
+    expect(await otpService.isPhoneVerified(OtpPurpose.REGISTER, phoneFail)).toBe(true);
 
     // Restore normal transaction for success case
     dataSource.transaction = vi.fn(async (cb: any) => {
@@ -365,7 +366,7 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
     });
 
     const phoneSuccess = getNextPhone();
-    await otpService.setPhoneVerified(phoneSuccess);
+    await otpService.setPhoneVerified(OtpPurpose.REGISTER, phoneSuccess);
 
     await authService.register({
       fullName: 'Success User',
@@ -374,7 +375,7 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
     });
 
     // Marker MUST NOT be restored on successful register
-    expect(await otpService.isPhoneVerified(phoneSuccess)).toBe(false);
+    expect(await otpService.isPhoneVerified(OtpPurpose.REGISTER, phoneSuccess)).toBe(false);
   });
 
   // Requirement 13: Redis Failure = Fail-Closed
@@ -406,8 +407,8 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
     ).rejects.toThrow('Redis Unavailable');
 
     // 3. OtpService throws and does NOT fail-open
-    await expect(brokenOtp.verifyOtp('0940000000', '123456')).rejects.toThrow('Redis Unavailable');
-    await expect(brokenOtp.createAndSaveOtp('0940000000')).rejects.toThrow('Redis Unavailable');
+    await expect(brokenOtp.verifyOtp(OtpPurpose.REGISTER, '0940000000', '123456')).rejects.toThrow('Redis Unavailable');
+    await expect(brokenOtp.createAndSaveOtp(OtpPurpose.REGISTER, '0940000000')).rejects.toThrow('Redis Unavailable');
   });
 
   // Requirement 14: Register Requires OTP
@@ -427,7 +428,7 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
   // Security Invariants Check: No Plaintext Secrets in Storage or Response
   it('Security Invariant: Refresh tokens in user_sessions are SHA-256 hashes, not plaintext', async () => {
     const phone = getNextPhone();
-    await otpService.setPhoneVerified(phone);
+    await otpService.setPhoneVerified(OtpPurpose.REGISTER, phone);
 
     const reg = await authService.register({
       fullName: 'Hash Invariant User',

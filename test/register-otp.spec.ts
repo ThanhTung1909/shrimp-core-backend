@@ -1,3 +1,4 @@
+import { OtpPurpose } from '../src/common/redis/otp.constants.js';
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { ConfigService } from '@nestjs/config';
 import { BadRequestException, ConflictException } from '@nestjs/common';
@@ -65,14 +66,7 @@ describe('REGISTER OTP VERIFICATION INTEGRATION SUITE', () => {
       }),
     };
 
-    authService = new AuthService(
-      usersService,
-      jwtService,
-      configService,
-      {} as any,
-      {} as any,
-      otpService,
-    );
+    authService = new AuthService(usersService, jwtService, configService, {} as any, {} as any, {} as any, {} as any, otpService);
   });
 
   it('Test 1 — Register không verify OTP -> Bị từ chối và User không được tạo', async () => {
@@ -94,12 +88,12 @@ describe('REGISTER OTP VERIFICATION INTEGRATION SUITE', () => {
     const phone = getNextPhone();
 
     // Tạo verified marker với TTL 1s
-    await otpService.setPhoneVerified(phone, 1);
-    expect(await otpService.isPhoneVerified(phone)).toBe(true);
+    await otpService.setPhoneVerified(OtpPurpose.REGISTER, phone, 1);
+    expect(await otpService.isPhoneVerified(OtpPurpose.REGISTER, phone)).toBe(true);
 
     // Chờ 1.1s cho marker hết hạn
     await new Promise((resolve) => setTimeout(resolve, 1100));
-    expect(await otpService.isPhoneVerified(phone)).toBe(false);
+    expect(await otpService.isPhoneVerified(OtpPurpose.REGISTER, phone)).toBe(false);
 
     const registerDto = {
       fullName: 'Expired OTP User',
@@ -115,12 +109,12 @@ describe('REGISTER OTP VERIFICATION INTEGRATION SUITE', () => {
     const phone = getNextPhone();
 
     // 1. Send OTP
-    const { otp } = await otpService.createAndSaveOtp(phone);
+    const { otp } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
     // 2. Verify OTP thành công -> Tạo marker otp:verified:<phone>
-    const verifyOk = await otpService.verifyOtp(phone, otp);
+    const verifyOk = await otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp);
     expect(verifyOk).toBe(true);
-    expect(await otpService.isPhoneVerified(phone)).toBe(true);
+    expect(await otpService.isPhoneVerified(OtpPurpose.REGISTER, phone)).toBe(true);
 
     // 3. Register
     const res = await authService.register({
@@ -137,7 +131,7 @@ describe('REGISTER OTP VERIFICATION INTEGRATION SUITE', () => {
     expect(usersService.createUser).toHaveBeenCalledTimes(1);
 
     // 4. Test 4: Marker bị consume -> không còn tồn tại trong Redis
-    expect(await otpService.isPhoneVerified(phone)).toBe(false);
+    expect(await otpService.isPhoneVerified(OtpPurpose.REGISTER, phone)).toBe(false);
     expect(await redisService.exists(getOtpVerifiedKey(phone))).toBe(0);
   });
 
@@ -145,8 +139,8 @@ describe('REGISTER OTP VERIFICATION INTEGRATION SUITE', () => {
     const phone = getNextPhone();
 
     // Verify OTP
-    const { otp } = await otpService.createAndSaveOtp(phone);
-    await otpService.verifyOtp(phone, otp);
+    const { otp } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
+    await otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp);
 
     // Lần 1: Thành công
     const firstRes = await authService.register({
@@ -170,8 +164,8 @@ describe('REGISTER OTP VERIFICATION INTEGRATION SUITE', () => {
     const phone = getNextPhone();
 
     // Tạo verified marker
-    await otpService.setPhoneVerified(phone, 600);
-    expect(await otpService.isPhoneVerified(phone)).toBe(true);
+    await otpService.setPhoneVerified(OtpPurpose.REGISTER, phone, 600);
+    expect(await otpService.isPhoneVerified(OtpPurpose.REGISTER, phone)).toBe(true);
 
     // Gửi 2 request register đồng thời cho cùng 1 số điện thoại
     const results = await Promise.allSettled([
@@ -198,7 +192,7 @@ describe('REGISTER OTP VERIFICATION INTEGRATION SUITE', () => {
     expect(usersService.createUser).toHaveBeenCalledTimes(1);
 
     // Marker đã bị xóa hoàn toàn
-    expect(await otpService.isPhoneVerified(phone)).toBe(false);
+    expect(await otpService.isPhoneVerified(OtpPurpose.REGISTER, phone)).toBe(false);
   });
 
   it('Test 7 — Phone đã tồn tại -> fail ConflictException và KHÔNG làm mất marker OTP', async () => {
@@ -212,8 +206,8 @@ describe('REGISTER OTP VERIFICATION INTEGRATION SUITE', () => {
     });
 
     // User vừa verify OTP thành công
-    await otpService.setPhoneVerified(phone, 600);
-    expect(await otpService.isPhoneVerified(phone)).toBe(true);
+    await otpService.setPhoneVerified(OtpPurpose.REGISTER, phone, 600);
+    expect(await otpService.isPhoneVerified(OtpPurpose.REGISTER, phone)).toBe(true);
 
     // Gọi register -> Phải ném ConflictException
     await expect(
@@ -225,7 +219,7 @@ describe('REGISTER OTP VERIFICATION INTEGRATION SUITE', () => {
     ).rejects.toThrow(ConflictException);
 
     // QUAN TRỌNG: Marker OTP KHÔNG bị consume oan, vẫn còn nguyên trong Redis
-    expect(await otpService.isPhoneVerified(phone)).toBe(true);
+    expect(await otpService.isPhoneVerified(OtpPurpose.REGISTER, phone)).toBe(true);
   });
 
   it('Test 8 — Database error -> Register fail và khôi phục lại marker OTP', async () => {
@@ -235,7 +229,7 @@ describe('REGISTER OTP VERIFICATION INTEGRATION SUITE', () => {
     usersService.createUser.mockRejectedValueOnce(new Error('PostgreSQL deadlock error'));
 
     // Đặt marker verified
-    await otpService.setPhoneVerified(phone, 600);
+    await otpService.setPhoneVerified(OtpPurpose.REGISTER, phone, 600);
 
     // Register thất bại do lỗi DB
     await expect(
@@ -247,7 +241,7 @@ describe('REGISTER OTP VERIFICATION INTEGRATION SUITE', () => {
     ).rejects.toThrow('PostgreSQL deadlock error');
 
     // Marker OTP phải được khôi phục, không làm mất quyền đăng ký của user
-    expect(await otpService.isPhoneVerified(phone)).toBe(true);
+    expect(await otpService.isPhoneVerified(OtpPurpose.REGISTER, phone)).toBe(true);
   });
 
   it('Test 9 — Redis failure khi kiểm tra marker -> fail-closed, không tạo user', async () => {
@@ -283,8 +277,8 @@ describe('REGISTER OTP VERIFICATION INTEGRATION SUITE', () => {
     const cleanPhone = '0981123456';
 
     // Verify OTP với số đã chuẩn hóa
-    const { otp } = await otpService.createAndSaveOtp(cleanPhone);
-    await otpService.verifyOtp(cleanPhone, otp);
+    const { otp } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, cleanPhone);
+    await otpService.verifyOtp(OtpPurpose.REGISTER, cleanPhone, otp);
 
     // Register với số có khoảng trắng -> Hệ thống tự chuẩn hóa và nhận diện marker
     const res = await authService.register({
@@ -295,6 +289,6 @@ describe('REGISTER OTP VERIFICATION INTEGRATION SUITE', () => {
 
     expect(res).toBeDefined();
     expect(res.phoneNumber).toBe(cleanPhone);
-    expect(await otpService.isPhoneVerified(cleanPhone)).toBe(false);
+    expect(await otpService.isPhoneVerified(OtpPurpose.REGISTER, cleanPhone)).toBe(false);
   });
 });
