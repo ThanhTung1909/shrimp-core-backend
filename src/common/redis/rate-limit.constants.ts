@@ -1,3 +1,5 @@
+import { createHash } from 'crypto';
+
 /**
  * Định nghĩa cấu hình các ngưỡng giới hạn (Rate Limits) cho hệ thống Authentication.
  * Không hard-code các con số rải rác trong Controller hoặc Service.
@@ -7,6 +9,8 @@ export const RATE_LIMIT_CONFIG = {
   LOGIN: {
     IP_LIMIT: 10,
     IP_WINDOW: 60,
+    // Retained for compatibility; Password Login no longer applies this
+    // account-specific request limiter. Failed-password protection is keyed by userId.
     PHONE_LIMIT: 5,
     PHONE_WINDOW: 300,
   },
@@ -19,9 +23,9 @@ export const RATE_LIMIT_CONFIG = {
     IP_WINDOW: 600,
   },
   OTP_SEND: {
-    PHONE_LIMIT: 1,
+    PHONE_LIMIT: 5,
     PHONE_WINDOW: 60,
-    IP_LIMIT: 5,
+    IP_LIMIT: 20,
     IP_WINDOW: 600,
   },
   OTP_VERIFY: {
@@ -59,7 +63,7 @@ export function normalizePhone(phone?: string | null): string {
   if (!phone || typeof phone !== 'string') {
     return '';
   }
-  return phone.trim().replace(/\s+/g, '');
+  return phone.trim().toLowerCase().replace(/\s+/g, '');
 }
 
 /**
@@ -70,7 +74,10 @@ export function getLoginIpKey(ip?: string | null): string {
 }
 
 export function getLoginPhoneKey(phone?: string | null): string {
-  return `rl:login:phone:${normalizePhone(phone)}`;
+  const identifierHash = createHash('sha256')
+    .update(normalizePhone(phone))
+    .digest('hex');
+  return `rl:login:phone:${identifierHash}`;
 }
 
 export function getRefreshIpKey(ip?: string | null): string {
@@ -92,3 +99,4 @@ export function getOtpSendIpKey(ip?: string | null): string {
 export function getOtpVerifyPhoneKey(phone?: string | null): string {
   return `rl:otp:verify:phone:${normalizePhone(phone)}`;
 }
+

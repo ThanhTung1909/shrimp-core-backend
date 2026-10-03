@@ -1,6 +1,6 @@
-﻿import { IsNotEmpty, IsString, Length, Matches, IsEmail, ValidateIf } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, MinLength, ValidateIf, Matches } from 'class-validator';
 
-export class VerifyOtpDto {
+export class ResetPasswordDto {
   @ValidateIf(o => !o.email)
   @IsString({ message: 'Số điện thoại phải là chuỗi ký tự!' })
   @IsNotEmpty({ message: 'Số điện thoại không được để trống!' })
@@ -16,6 +16,10 @@ export class VerifyOtpDto {
 
   @IsString({ message: 'Mã OTP phải là chuỗi ký tự!' })
   @IsNotEmpty({ message: 'Mã OTP không được để trống!' })
-  @Length(6, 6, { message: 'Mã OTP phải bao gồm đúng 6 chữ số!' })
   otp: string;
+
+  @IsString({ message: 'Mật khẩu mới phải là chuỗi ký tự!' })
+  @IsNotEmpty({ message: 'Mật khẩu mới không được để trống!' })
+  @MinLength(8, { message: 'Mật khẩu mới phải có ít nhất 8 ký tự!' })
+  newPassword: string;
 }

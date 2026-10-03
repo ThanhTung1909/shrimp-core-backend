@@ -13,6 +13,7 @@ describe('PondsService', () => {
   let mockPondRepo: any;
   let mockThresholdRepo: any;
   let mockManualLogRepo: any;
+  let mockUserRepo: any;
 
   beforeEach(() => {
     mockPondRepo = {
@@ -25,43 +26,39 @@ describe('PondsService', () => {
 
     mockThresholdRepo = {};
     mockManualLogRepo = {};
+    mockUserRepo = {
+      findOne: vi.fn().mockResolvedValue({
+        userId: 'farmer-target',
+        isActive: true,
+        role: Role.FARMER,
+      }),
+    };
 
     service = new PondsService(
       mockPondRepo,
       mockThresholdRepo,
       mockManualLogRepo,
+      mockUserRepo,
     );
   });
 
   describe('createPond (A. CREATE)', () => {
-    it('FARMER tạo pond cho chính mình -> thành công', async () => {
+    it('Thiếu userId -> BadRequestException', async () => {
       const dto = { pondName: 'Ao cua toi', areaM2: 100, depthM: 2, shrimpDensity: 100 };
-      const currentUserId = 'farmer-1';
+      const currentUserId = 'manager-1';
 
-      const result = await service.createPond(dto, currentUserId, Role.FARMER);
-
-      expect(result).toBeDefined();
-      expect(result.userId).toBe(currentUserId);
-      expect(mockPondRepo.save).toHaveBeenCalled();
-    });
-
-    it('FARMER cố tạo pond cho user khác -> bị ép về chính mình (targetUserId = currentUserId)', async () => {
-      const dto = { pondName: 'Ao cua toi', areaM2: 100, depthM: 2, shrimpDensity: 100, userId: 'other-user' };
-      const currentUserId = 'farmer-1';
-
-      const result = await service.createPond(dto, currentUserId, Role.FARMER);
-
-      expect(result.userId).toBe(currentUserId);
-      expect(result.userId).not.toBe('other-user');
+      await expect(service.createPond(dto, currentUserId, Role.MANAGER))
+        .rejects.toThrow('Vui lòng cung cấp userId của người nông dân (Farmer) để gán ao nuôi!');
     });
 
     it('MANAGER tạo pond -> thành công (có thể truyền userId cụ thể)', async () => {
-      const dto = { pondName: 'Ao tao cho user', areaM2: 100, depthM: 2, shrimpDensity: 100, userId: 'farmer-2' };
+      const dto = { pondName: 'Ao tao cho user', areaM2: 100, depthM: 2, shrimpDensity: 100, userId: 'farmer-target' };
       const currentUserId = 'manager-1';
 
       const result = await service.createPond(dto, currentUserId, Role.MANAGER);
 
-      expect(result.userId).toBe('farmer-2');
+      expect(result.userId).toBe('farmer-target');
+      expect(mockUserRepo.findOne).toHaveBeenCalledWith({ where: { userId: 'farmer-target' } });
     });
 
     it('tên ao đã tồn tại -> ConflictException', async () => {
@@ -184,6 +181,12 @@ describe('PondsService', () => {
     it('MANAGER update pond -> thành công, có thể thay đổi owner (userId)', async () => {
       const mockPond = { pondId: 'pond-1', userId: 'farmer-old' };
       mockPondRepo.findOne.mockResolvedValue(mockPond);
+      
+      mockUserRepo.findOne.mockResolvedValue({
+        userId: 'farmer-new',
+        isActive: true,
+        role: Role.FARMER,
+      });
 
       const result = await service.updatePond('pond-1', { userId: 'farmer-new' }, 'manager-1', Role.MANAGER);
 

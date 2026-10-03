@@ -164,8 +164,9 @@ export class OtpService {
       )) as [number, string, number];
 
       const status = result[0];
+      const code = result[1];
       if (status !== 1) {
-        throw new BadRequestException('Mã OTP không chính xác hoặc đã hết hạn!');
+        throw new BadRequestException(`Mã OTP không chính xác hoặc đã hết hạn! [${code}]`);
       }
 
       return true;

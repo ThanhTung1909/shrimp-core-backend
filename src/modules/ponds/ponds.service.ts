@@ -10,11 +10,12 @@ import {
   Between,
   FindOptionsWhere,
   ILike,
-  LessThanOrEqual,
   MoreThanOrEqual,
+  LessThanOrEqual,
   Repository,
 } from 'typeorm';
 import { Pond } from './entities/pond.entity.js';
+import { User } from '../users/entities/user.entity.js';
 import { ThresholdConfig } from './entities/threshold-config.entity.js';
 import { ManualTestLog } from './entities/manual-test-log.entity.js';
 import { CreatePondDto } from './dto/create-pond.dto.js';
@@ -42,11 +43,27 @@ export class PondsService {
     private readonly thresholdRepo: Repository<ThresholdConfig>,
     @InjectRepository(ManualTestLog)
     private readonly manualLogRepo: Repository<ManualTestLog>,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
   ) {}
 
   // ==========================================
   // 1. POND CRUD
   // ==========================================
+
+  private async validateAssignableFarmer(userId: string): Promise<User> {
+    const user = await this.userRepo.findOne({ where: { userId } });
+    if (!user) {
+      throw new NotFoundException('Người dùng không tồn tại!');
+    }
+    if (!user.isActive) {
+      throw new BadRequestException('Người dùng đã bị vô hiệu hóa!');
+    }
+    if (user.role !== Role.FARMER) {
+      throw new BadRequestException('Chỉ có thể gán ao nuôi cho người dùng có vai trò FARMER!');
+    }
+    return user;
+  }
 
   async createPond(
     createPondDto: CreatePondDto,
@@ -61,14 +78,15 @@ export class PondsService {
       throw new ConflictException('Tên ao nuôi đã tồn tại!');
     }
 
-    const targetUserId =
-      currentUserRole === Role.MANAGER && createPondDto.userId
-        ? createPondDto.userId
-        : currentUserId;
+    if (!createPondDto.userId) {
+      throw new BadRequestException('Vui lòng cung cấp userId của người nông dân (Farmer) để gán ao nuôi!');
+    }
+
+    const farmer = await this.validateAssignableFarmer(createPondDto.userId);
 
     const newPond = this.pondRepo.create({
       ...createPondDto,
-      userId: targetUserId,
+      userId: farmer.userId,
     });
 
     return await this.pondRepo.save(newPond);
@@ -161,8 +179,13 @@ export class PondsService {
       currentUserRole,
     );
 
-    if (updatePondDto.userId && currentUserRole === Role.MANAGER) {
-      pond.userId = updatePondDto.userId;
+    if (updatePondDto.userId) {
+      if (currentUserRole === Role.MANAGER || currentUserRole === Role.ADMIN) {
+        if (updatePondDto.userId !== pond.userId) {
+          const farmer = await this.validateAssignableFarmer(updatePondDto.userId);
+          pond.userId = farmer.userId;
+        }
+      }
     }
     if (
       updatePondDto.pondName !== undefined &&

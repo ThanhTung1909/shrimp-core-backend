@@ -48,6 +48,6 @@ export class CreatePondDto {
 
   // Dành riêng cho MANAGER nếu muốn tạo ao gán cho người dùng cụ thể
   @IsOptional()
-  @IsString({ message: 'userId phải là chuỗi ký tự!' })
+  @IsUUID('4', { message: 'userId phải là UUID v4 hợp lệ!' })
   userId?: string;
 }

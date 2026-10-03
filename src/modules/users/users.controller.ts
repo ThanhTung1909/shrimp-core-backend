@@ -30,6 +30,16 @@ import { FindUsersQueryDto } from './dto/find-users-query.dto.js';
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
+  @Patch(':id/unlock')
+  @Roles(Role.ADMIN, Role.MANAGER)
+  async unlockPasswordLogin(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') actorId: string,
+    @CurrentUser('role') actorRole: Role,
+  ): Promise<{ message: string }> {
+    return this.usersService.unlockPasswordLogin(actorId, actorRole, id);
+  }
+
   // API 1: Người dùng tự cập nhật thông tin cá nhân (Profile)
   @Patch('profile')
   async updateProfile(

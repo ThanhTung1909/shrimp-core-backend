@@ -164,7 +164,14 @@ export class TelemetryService implements OnModuleInit {
   }
 
   async updateDeviceStatus(deviceId: string, status: DeviceStatus): Promise<Device | null> {
-    const device = await this.deviceRepo.findOne({ where: { deviceId } });
+    const device = await this.deviceRepo.findOne({ 
+      where: { deviceId },
+      relations: {
+        pond: {
+          user: true
+        }
+      }
+    });
     if (!device) {
       return null;
     }
@@ -197,6 +204,17 @@ export class TelemetryService implements OnModuleInit {
           message: `Thiết bị ${device.deviceName || device.deviceId} mất kết nối mạng đột ngột hoặc quá hạn phản hồi`,
         });
         await this.alertRepo.save(newAlert);
+
+        // BE-03-1: Recipient resolution cho FCM
+        if (device.pond && device.pond.user) {
+          const farmer = device.pond.user;
+          if (farmer.isActive && farmer.fcmToken) {
+            this.logger.log(`[FCM-Mock] Đã định tuyến alert mới tới Farmer: ${farmer.userId}, FCM Token: ${farmer.fcmToken}`);
+            // TODO: Call Notification/FCM service to actually push notification when infrastructure is ready.
+          } else {
+            this.logger.log(`[FCM-Mock] Skip FCM push. Farmer (userId: ${farmer.userId}) không active hoặc chưa có FCM Token.`);
+          }
+        }
       }
     }
 
