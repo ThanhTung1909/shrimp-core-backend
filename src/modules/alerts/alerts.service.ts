@@ -45,7 +45,7 @@ export class AlertsService {
   ): Promise<Alert> {
     const alert = await this.alertRepo.findOne({ where: { alertId } });
     if (!alert) {
-      throw new NotFoundException(`Alert with ID ${alertId} not found`);
+      throw new NotFoundException(`Không tìm thấy cảnh báo với ID: ${alertId}`);
     }
 
     alert.status = AlertStatus.RESOLVED;

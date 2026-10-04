@@ -55,7 +55,8 @@ export class TelemetryService implements OnModuleInit {
             'telemetry_data', 
             'recorded_at', 
             chunk_time_interval => INTERVAL '7 days', 
-            if_not_exists => TRUE
+            if_not_exists => TRUE,
+            migrate_data => TRUE
           );
         `);
         this.logger.log('[TimescaleDB] Đã khởi tạo Hypertable cho bảng telemetry_data (chu kỳ 7 ngày).');
@@ -174,7 +175,7 @@ export class TelemetryService implements OnModuleInit {
     }
     const updatedDevice = await this.deviceRepo.save(device);
 
-    if (status === DeviceStatus.OFFLINE) {
+    if (status === DeviceStatus.OFFLINE && device.pondId) {
       const activeAlert = await this.alertRepo.findOne({
         where: {
           pondId: device.pondId,
