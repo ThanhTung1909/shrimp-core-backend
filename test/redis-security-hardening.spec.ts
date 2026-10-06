@@ -51,16 +51,6 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
     rateLimitService = new RateLimitService(redisService);
     otpService = new OtpService(redisService);
     jwtService = new JwtService({ secret: 'test_jwt_access_secret_step8_hardening_12345' });
-
-    const originalSignAsync = jwtService.signAsync.bind(jwtService);
-    let signCounter = 0;
-    vi.spyOn(jwtService, 'signAsync').mockImplementation(async (payload: any, options?: any) => {
-      signCounter++;
-      return originalSignAsync(payload, {
-        ...options,
-        jwtid: 'tok-step8-' + signCounter + '-' + Math.random(),
-      });
-    });
   });
 
   afterAll(async () => {
@@ -89,6 +79,7 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
         return null;
       }),
       findByPhoneNumber: vi.fn(async (phone: string) => usersStore.get(phone) || null),
+      findByEmail: vi.fn(async (email: string) => null),
       createUser: vi.fn(async (data: any) => {
         const user = {
           userId: 'user-harden-' + Math.random(),
@@ -159,12 +150,21 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
       }),
     };
 
+    const emailService: any = {
+      sendInitialPassword: vi.fn().mockResolvedValue(undefined),
+    };
+    const esmsService: any = {
+      sendSMS: vi.fn().mockResolvedValue(undefined),
+    };
+
     authService = new AuthService(
       usersService,
       jwtService,
       configService,
       userSessionRepository,
       dataSource,
+      emailService,
+      esmsService,
       otpService,
     );
   });
@@ -216,7 +216,7 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
     const phone = getNextPhone();
     await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
-    const codeKey = getOtpCodeKey(phone);
+    const codeKey = getOtpCodeKey(OtpPurpose.REGISTER, phone);
     const ttl = await redisService.ttl(codeKey);
     expect(ttl).toBeGreaterThan(250);
     expect(ttl).toBeLessThanOrEqual(OTP_CONFIG.TTL_SECONDS);
@@ -227,7 +227,7 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
     const phone = getNextPhone();
     const { otp, otpHash } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
-    const rawStored = await redisService.get(getOtpCodeKey(phone));
+    const rawStored = await redisService.get(getOtpCodeKey(OtpPurpose.REGISTER, phone));
     expect(rawStored).not.toBeNull();
     expect(rawStored).not.toBe(otp);
     expect(rawStored).toBe(otpHash);
@@ -244,8 +244,8 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
     }
 
     // Both code and attempts keys must be deleted
-    expect(await redisService.exists(getOtpCodeKey(phone))).toBe(0);
-    expect(await redisService.exists(getOtpAttemptsKey(phone))).toBe(0);
+    expect(await redisService.exists(getOtpCodeKey(OtpPurpose.REGISTER, phone))).toBe(0);
+    expect(await redisService.exists(getOtpAttemptsKey(OtpPurpose.REGISTER, phone))).toBe(0);
 
     // 6th attempt with CORRECT OTP must still fail
     await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp)).rejects.toThrow(BadRequestException);
@@ -288,7 +288,7 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
 
     await otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp);
 
-    const markerKey = getOtpVerifiedKey(phone);
+    const markerKey = getOtpVerifiedKey(OtpPurpose.REGISTER, phone);
     const ttl = await redisService.ttl(markerKey);
     expect(ttl).toBeGreaterThan(550);
     expect(ttl).toBeLessThanOrEqual(OTP_CONFIG.VERIFIED_TTL_SECONDS);
@@ -307,75 +307,37 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
     expect(secondConsume).toBe(false);
   });
 
-  // Requirement 11: Concurrent Register
-  it('Requirement 11: Concurrent register calls with same OTP marker allow exactly 1 account creation', async () => {
+  // Requirement 11: Concurrent OTP Marker Consumption
+  it('Requirement 11: Concurrent consumePhoneVerified calls with same OTP marker allow exactly 1 success', async () => {
     const phone = getNextPhone();
-    await otpService.setPhoneVerified(OtpPurpose.REGISTER, phone);
+    await otpService.setPhoneVerified(OtpPurpose.RESET_PASSWORD, phone);
 
-    const registerPayload = {
-      fullName: 'Concurrent Hardening',
-      phoneNumber: phone,
-      password: 'Password123!',
-    };
-
-    const results = await Promise.allSettled([
-      authService.register(registerPayload),
-      authService.register(registerPayload),
+    const results = await Promise.all([
+      otpService.consumePhoneVerified(OtpPurpose.RESET_PASSWORD, phone),
+      otpService.consumePhoneVerified(OtpPurpose.RESET_PASSWORD, phone),
     ]);
 
-    const successes = results.filter((r) => r.status === 'fulfilled');
-    const failures = results.filter((r) => r.status === 'rejected');
+    const successes = results.filter((r) => r === true);
+    const failures = results.filter((r) => r === false);
 
     expect(successes).toHaveLength(1);
     expect(failures).toHaveLength(1);
-    expect(usersStore.has(phone)).toBe(true);
   });
 
-  // Requirement 12: OTP Restore After Transaction Failure
-  it('Requirement 12: OTP marker is restored if DB transaction fails, but NOT restored on success', async () => {
-    const phoneFail = getNextPhone();
-    await otpService.setPhoneVerified(OtpPurpose.REGISTER, phoneFail);
+  // Requirement 12: OTP Marker Restoration
+  it('Requirement 12: OTP marker can be restored and re-checked via OtpService', async () => {
+    const phone = getNextPhone();
+    await otpService.setPhoneVerified(OtpPurpose.RESET_PASSWORD, phone);
+    expect(await otpService.isPhoneVerified(OtpPurpose.RESET_PASSWORD, phone)).toBe(true);
 
-    // Mock failing transaction
-    dataSource.transaction = vi.fn(async (cb: any) => {
-      const failingManager = {
-        create: vi.fn(),
-        save: vi.fn().mockRejectedValue(new Error('DB Constraint Violation')),
-      };
-      return await cb(failingManager);
-    });
+    // Consume marker
+    const consumed = await otpService.consumePhoneVerified(OtpPurpose.RESET_PASSWORD, phone);
+    expect(consumed).toBe(true);
+    expect(await otpService.isPhoneVerified(OtpPurpose.RESET_PASSWORD, phone)).toBe(false);
 
-    await expect(
-      authService.register({
-        fullName: 'Fail Transaction User',
-        phoneNumber: phoneFail,
-        password: 'Password123!',
-      }),
-    ).rejects.toThrow('DB Constraint Violation');
-
-    // Marker MUST be restored
-    expect(await otpService.isPhoneVerified(OtpPurpose.REGISTER, phoneFail)).toBe(true);
-
-    // Restore normal transaction for success case
-    dataSource.transaction = vi.fn(async (cb: any) => {
-      const normalManager = {
-        create: vi.fn((e: any, d: any) => ({ id: 'sess-' + Math.random(), ...d })),
-        save: vi.fn(async (e: any, s: any) => s),
-      };
-      return await cb(normalManager);
-    });
-
-    const phoneSuccess = getNextPhone();
-    await otpService.setPhoneVerified(OtpPurpose.REGISTER, phoneSuccess);
-
-    await authService.register({
-      fullName: 'Success User',
-      phoneNumber: phoneSuccess,
-      password: 'Password123!',
-    });
-
-    // Marker MUST NOT be restored on successful register
-    expect(await otpService.isPhoneVerified(OtpPurpose.REGISTER, phoneSuccess)).toBe(false);
+    // Restore marker
+    await otpService.restorePhoneVerified(OtpPurpose.RESET_PASSWORD, phone);
+    expect(await otpService.isPhoneVerified(OtpPurpose.RESET_PASSWORD, phone)).toBe(true);
   });
 
   // Requirement 13: Redis Failure = Fail-Closed
@@ -401,7 +363,7 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
     const brokenController = new AuthController(authService, usersService, brokenRateLimit);
     await expect(
       brokenController.register(
-        { fullName: 'Broken', phoneNumber: getNextPhone(), password: 'Pass' },
+        { fullName: 'Broken', phoneNumber: getNextPhone(), email: 'broken@test.com', role: Role.FARMER },
         '10.0.0.1',
       ),
     ).rejects.toThrow('Redis Unavailable');
@@ -411,35 +373,50 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
     await expect(brokenOtp.createAndSaveOtp(OtpPurpose.REGISTER, '0940000000')).rejects.toThrow('Redis Unavailable');
   });
 
-  // Requirement 14: Register Requires OTP
-  it('Requirement 14: Register requires OTP verification and rejects unverified requests', async () => {
+  // Requirement 14: Manager Onboarding Contract
+  it('Requirement 14: Manager onboarding register generates password, hashes it, and returns no tokens', async () => {
     const phone = getNextPhone();
-    const registerDto = {
-      fullName: 'Unverified Register User',
+    const res = await authService.register({
+      fullName: 'Onboarded User',
       phoneNumber: phone,
-      password: 'Password123!',
-    };
+      email: 'onboard@test.com',
+      role: Role.FARMER,
+    });
 
-    await expect(authService.register(registerDto)).rejects.toThrow(BadRequestException);
-    await expect(authService.register(registerDto)).rejects.toThrow('Vui lòng xác thực OTP trước khi đăng ký!');
-    expect(usersStore.has(phone)).toBe(false);
+    expect(res).toHaveProperty('userId');
+    expect(res).toHaveProperty('phoneNumber', phone);
+    expect(res).toHaveProperty('email', 'onboard@test.com');
+    expect(res).toHaveProperty('role', Role.FARMER);
+    expect(res).not.toHaveProperty('accessToken');
+    expect(res).not.toHaveProperty('refreshToken');
+    expect(usersStore.has(phone)).toBe(true);
   });
 
   // Security Invariants Check: No Plaintext Secrets in Storage or Response
   it('Security Invariant: Refresh tokens in user_sessions are SHA-256 hashes, not plaintext', async () => {
     const phone = getNextPhone();
-    await otpService.setPhoneVerified(OtpPurpose.REGISTER, phone);
+    const password = 'TestPassword123!';
+    const passwordHash = await import('bcrypt').then((b) => b.hash(password, 10));
 
-    const reg = await authService.register({
-      fullName: 'Hash Invariant User',
+    usersStore.set(phone, {
+      userId: 'user-login-hash-check',
       phoneNumber: phone,
-      password: 'Password123!',
+      passwordHash,
+      isActive: true,
+      tokenVersion: 0,
+      role: Role.FARMER,
+      fullName: 'Login Hash User',
     });
 
-    const session = sessionsStore.find((s) => s.userId === reg.userId);
+    const loginRes = await authService.login({
+      phoneNumber: phone,
+      password,
+    });
+
+    const session = sessionsStore.find((s) => s.userId === loginRes.userId);
     expect(session).toBeDefined();
     expect(session.refreshTokenHash).toHaveLength(64);
-    expect(session.refreshTokenHash).not.toBe(reg.refreshToken);
+    expect(session.refreshTokenHash).not.toBe(loginRes.refreshToken);
     expect(session.refreshToken).toBeUndefined();
   });
 });

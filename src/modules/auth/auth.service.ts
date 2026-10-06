@@ -1,4 +1,4 @@
-﻿import {
+import {
   BadRequestException,
   ConflictException,
   Injectable,
@@ -22,9 +22,10 @@ import { ResetPasswordDto } from './dto/reset-password.dto.js';
 import { Role } from '../../common/enums/role.enum.js';
 import { UserSession } from './entities/user-session.entity.js';
 import { OtpService } from './otp.service.js';
-import { normalizePhone } from '../../common/redis/rate-limit.constants.js';
+import { normalizePhone, getAccessTokenBlacklistKey } from '../../common/redis/rate-limit.constants.js';
 import { OtpPurpose } from '../../common/redis/otp.constants.js';
 import { LoginSecurityService } from '../../common/redis/login-security.service.js';
+import { RedisService } from '../../common/redis/redis.service.js';
 import { EmailService } from '../email/email.service.js';
 import { EsmsService } from '../../common/esms/esms.service.js';
 
@@ -46,6 +47,8 @@ export class AuthService {
     private readonly otpService?: OtpService,
     @Optional()
     private readonly loginSecurityService?: LoginSecurityService,
+    @Optional()
+    private readonly redisService?: RedisService,
   ) {}
 
   //Hàm gửi OTP (Lưu SHA-256 hash vào Redis với TTL 5 phút)
@@ -115,6 +118,21 @@ export class AuthService {
         expiresIn: '5 phút',
     };
   }
+
+  /**
+   * POST /auth/forgot-password — thin alias for sendOtp with RESET_PASSWORD purpose.
+   * Accepts only phoneNumber; purpose is hardcoded so this endpoint is self-contained.
+   * Anti-enumeration: same response shape regardless of whether the phone is registered.
+   */
+  async forgotPassword(phoneNumber: string): Promise<{
+    message: string;
+    phoneNumber: string;
+    otp?: string;
+    expiresIn: string;
+  }> {
+    return this.sendOtp({ phoneNumber, purpose: OtpPurpose.RESET_PASSWORD });
+  }
+
 
   //Hàm xác thực OTP (Xác thực atomic bằng Redis Lua Script)
   async verifyOtp(verifyOtpDto: VerifyOtpDto, deviceName?: string | null): Promise<any> {
@@ -186,15 +204,17 @@ export class AuthService {
         tokenVersion: user.tokenVersion,
         role: user.role,
         type: 'refresh',
-        jti: crypto.randomUUID(),
       };
 
-      const accessToken = await this.jwtService.signAsync(accessPayload);
+      const accessToken = await this.jwtService.signAsync(accessPayload, {
+        jwtid: crypto.randomUUID(),
+      });
 
       const refreshToken = await this.jwtService.signAsync(refreshPayload, {
         secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
         algorithm: 'HS256',
         expiresIn: (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d') as any,
+        jwtid: crypto.randomUUID(),
       });
 
       const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
@@ -329,7 +349,7 @@ export class AuthService {
           normalizedPhone,
           plainPassword,
         );
-      } catch (error) {
+      } catch {
         throw new InternalServerErrorException(
           'Không thể gửi email mật khẩu khởi tạo. Vui lòng thử lại sau!',
         );
@@ -426,15 +446,17 @@ export class AuthService {
       tokenVersion: user.tokenVersion,
       role: user.role,
       type: 'refresh',
-      jti: crypto.randomUUID(),
     };
-    const accessToken = await this.jwtService.signAsync(accessPayload);
+    const accessToken = await this.jwtService.signAsync(accessPayload, {
+      jwtid: crypto.randomUUID(),
+    });
 
     const refreshToken = await this.jwtService.signAsync(refreshPayload, {
       secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
       algorithm: 'HS256',
       expiresIn: (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ||
         '7d') as any,
+      jwtid: crypto.randomUUID(),
     });
 
     // Tạo server-side session cho Refresh Token (Phase 3)
@@ -539,7 +561,8 @@ export class AuthService {
         if (session.revokedAt !== null) {
           // Refresh Token Reuse Detected (Phase 5)
           // Revoke toàn bộ các session đang ACTIVE trong cùng tokenFamily
-          await this.userSessionRepository.update(
+          await manager.update(
+            UserSession,
             {
               tokenFamily: session.tokenFamily,
               revokedAt: IsNull(),
@@ -566,13 +589,18 @@ export class AuthService {
         await manager.save(UserSession, session);
 
         // 2. Tạo tokens mới
-        const newAccessToken = await this.jwtService.signAsync({
-          sub: user.userId,
-          phoneNumber: user.phoneNumber,
-          tokenVersion: user.tokenVersion,
-          role: user.role,
-          type: 'access',
-        });
+        const newAccessToken = await this.jwtService.signAsync(
+          {
+            sub: user.userId,
+            phoneNumber: user.phoneNumber,
+            tokenVersion: user.tokenVersion,
+            role: user.role,
+            type: 'access',
+          },
+          {
+            jwtid: crypto.randomUUID(),
+          },
+        );
 
         const newRefreshToken = await this.jwtService.signAsync(
           {
@@ -580,7 +608,6 @@ export class AuthService {
             tokenVersion: user.tokenVersion,
             role: user.role,
             type: 'refresh',
-            jti: crypto.randomUUID(),
           },
           {
             secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
@@ -588,6 +615,7 @@ export class AuthService {
             expiresIn: (this.configService.get<string>(
               'JWT_REFRESH_EXPIRES_IN',
             ) || '7d') as any,
+            jwtid: crypto.randomUUID(),
           },
         );
 
@@ -793,13 +821,18 @@ export class AuthService {
       );
 
       // 5. Tạo Access Token mới cho thiết bị hiện tại
-      const newAccessToken = await this.jwtService.signAsync({
-        sub: userId,
-        phoneNumber: user.phoneNumber,
-        tokenVersion: newTokenVersion,
-        role: user.role,
-        type: 'access',
-      });
+      const newAccessToken = await this.jwtService.signAsync(
+        {
+          sub: userId,
+          phoneNumber: user.phoneNumber,
+          tokenVersion: newTokenVersion,
+          role: user.role,
+          type: 'access',
+        },
+        {
+          jwtid: crypto.randomUUID(),
+        },
+      );
 
       // 6. Tạo Refresh Token mới cho thiết bị hiện tại
       const newRefreshToken = await this.jwtService.signAsync(
@@ -808,7 +841,6 @@ export class AuthService {
           tokenVersion: newTokenVersion,
           role: user.role,
           type: 'refresh',
-          jti: crypto.randomUUID(),
         },
         {
           secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
@@ -816,6 +848,7 @@ export class AuthService {
           expiresIn: (this.configService.get<string>(
             'JWT_REFRESH_EXPIRES_IN',
           ) || '7d') as any,
+          jwtid: crypto.randomUUID(),
         },
       );
 
@@ -860,7 +893,39 @@ export class AuthService {
   }
 
   // Hàm đăng xuất một thiết bị (Phase 6 - Per-device Logout)
-  async logout(userId: string, refreshToken: string) {
+  async logout(
+    userId: string,
+    refreshToken: string,
+    accessTokenJti?: string,
+    accessTokenExp?: number,
+  ) {
+    // Blacklist the current Access Token immediately so it cannot be reused
+    // even within its remaining JWT lifetime.
+    if (accessTokenJti !== undefined) {
+      if (accessTokenExp === undefined || !Number.isFinite(accessTokenExp)) {
+        throw new UnauthorizedException('Access token không hợp lệ!');
+      }
+      const now = Math.floor(Date.now() / 1000);
+      const remainingTtl = accessTokenExp - now;
+      if (remainingTtl > 0) {
+        if (!this.redisService) {
+          throw new InternalServerErrorException(
+            'Dịch vụ Redis chưa sẵn sàng!',
+          );
+        }
+        const blacklistKey = getAccessTokenBlacklistKey(accessTokenJti);
+        try {
+          await this.redisService.set(blacklistKey, '1', remainingTtl);
+        } catch {
+          // Redis failure must not silently report success — rethrow fail-closed
+          throw new InternalServerErrorException(
+            'Không thể thu hồi Access Token. Vui lòng thử lại!',
+          );
+        }
+      }
+      // If remainingTtl <= 0: token is already expired, no positive TTL blacklist entry needed
+    }
+
     try {
       const payload = await this.jwtService.verifyAsync(refreshToken, {
         secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
@@ -902,13 +967,17 @@ export class AuthService {
       return {
         message: 'Đăng xuất thành công!',
       };
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('thu hồi Access Token')) {
+        throw error;
+      }
       // Refresh token không hợp lệ hoặc hết hạn -> trả response an toàn, không lộ thông tin
       return {
         message: 'Đăng xuất thành công!',
       };
     }
   }
+
 
   // Hàm đăng xuất tất cả thiết bị (Phase 6 - Logout All Devices)
   async logoutAll(userId: string) {
