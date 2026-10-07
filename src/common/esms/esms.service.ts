@@ -43,8 +43,8 @@ export class EsmsService {
       IsUnicode: '0',
     };
 
-    // Ẩn SecretKey khỏi log để bảo mật
-    this.logger.debug(`Sending SMS to eSMS. Payload: ${JSON.stringify({ ...payload, SecretKey: '***' })}`);
+    // Do not log the request payload: Content contains the plaintext OTP.
+    this.logger.debug(`Sending SMS to eSMS for phone ${normalizedPhone}`);
 
     try {
       const response = await fetch(this.apiUrl, {
@@ -59,30 +59,34 @@ export class EsmsService {
 
       // Kiểm tra nếu response trả về XML/HTML lỗi
       if (text.trim().startsWith('<')) {
-        this.logger.error(`eSMS returned XML/HTML error page: ${text}`);
+        this.logger.error('eSMS returned an XML/HTML error response.');
         throw new InternalServerErrorException('eSMS Gateway trả về định dạng không hợp lệ (XML/HTML).');
       }
 
       let data;
       try {
         data = JSON.parse(text);
-      } catch (e) {
-        this.logger.error(`Failed to parse eSMS JSON response. Raw text: ${text}`);
+      } catch {
+        this.logger.error('Failed to parse eSMS JSON response.');
         throw new InternalServerErrorException('Không thể phân tích phản hồi từ eSMS Gateway.');
       }
 
-      this.logger.debug(`Response from eSMS: ${JSON.stringify(data)}`);
+      this.logger.debug(
+        `Response from eSMS: code=${data.CodeResult}, refId=${data.SMSID ?? 'n/a'}`,
+      );
 
       if (data.CodeResult !== '100') {
         const errorMsg = `eSMS Error [Code ${data.CodeResult}]: ${data.ErrorMessage}`;
-        this.logger.error(errorMsg);
+        this.logger.error(`eSMS provider rejected the request: code=${data.CodeResult}`);
         throw new InternalServerErrorException(errorMsg);
       }
 
-      this.logger.log(`Gửi SMS thành công tới ${normalizedPhone}, RefId: ${data.SMSID}`);
+      this.logger.log(
+        `Gửi SMS thành công tới ${normalizedPhone}, RefId: ${data.SMSID}`,
+      );
       return data;
     } catch (error: any) {
-      this.logger.error(`Lỗi kết nối hoặc xử lý eSMS: ${error.message}`);
+      this.logger.error('Lỗi kết nối hoặc xử lý eSMS.');
       throw new InternalServerErrorException(
         error.message || 'Không thể kết nối đến hệ thống gửi SMS',
       );

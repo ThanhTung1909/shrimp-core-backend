@@ -77,11 +77,17 @@ export class UsersController {
   // API 4: Quản trị viên tạo người dùng mới
   @Post()
   @Roles(Role.MANAGER)
-  async createUser(@Body() createUserDto: CreateUserDto): Promise<{
+  async createUser(
+    @CurrentUser('role') actorRole: Role,
+    @Body() createUserDto: CreateUserDto,
+  ): Promise<{
     message: string;
     user: Omit<User, 'passwordHash'>;
   }> {
-    const newUser = await this.usersService.createUserByAdmin(createUserDto);
+    const newUser = await this.usersService.createUserByAdmin(
+      actorRole,
+      createUserDto,
+    );
     return {
       message: 'Tạo tài khoản người dùng thành công!',
       user: newUser,
@@ -111,6 +117,7 @@ export class UsersController {
   @Patch(':id')
   @Roles(Role.MANAGER)
   async adminUpdateUser(
+    @CurrentUser('role') actorRole: Role,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() adminUpdateUserDto: AdminUpdateUserDto,
   ): Promise<{
@@ -118,6 +125,7 @@ export class UsersController {
     user: Omit<User, 'passwordHash'>;
   }> {
     const updatedUser = await this.usersService.adminUpdateUser(
+      actorRole,
       id,
       adminUpdateUserDto,
     );
@@ -131,9 +139,10 @@ export class UsersController {
   @Delete(':id')
   @Roles(Role.MANAGER)
   async deleteUser(
+    @CurrentUser('role') actorRole: Role,
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<{ message: string }> {
-    return this.usersService.deleteUser(id);
+    return this.usersService.deleteUser(actorRole, id);
   }
 
   @Patch(':id/unlock')

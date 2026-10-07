@@ -44,6 +44,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
     };
 
     usersService = {
+      assertCanCreateUser: vi.fn(),
       findById: vi.fn(),
       findByPhoneNumber: vi.fn(),
       createUser: vi.fn(),
@@ -542,7 +543,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
         phoneNumber: '0909999999',
         email: 'test@example.com',
         role: Role.FARMER,
-      });
+      }, Role.MANAGER);
 
       expect(res).toHaveProperty('userId');
       expect(res).toHaveProperty('fullName', 'Test User');
@@ -571,7 +572,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
         phoneNumber: '0901234568',
         email: 'mgr@example.com',
         role: Role.MANAGER,
-      });
+      }, Role.MANAGER);
 
       expect(res.role).toBe(Role.MANAGER);
     });
@@ -585,7 +586,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
           phoneNumber: '0909999999',
           email: 'dup@example.com',
           role: Role.FARMER,
-        }),
+        }, Role.MANAGER),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -599,7 +600,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
           phoneNumber: '0909888888',
           email: 'dup@example.com',
           role: Role.FARMER,
-        }),
+        }, Role.MANAGER),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -617,7 +618,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
         phoneNumber: '0908888888',
         email: 'hash@example.com',
         role: Role.FARMER,
-      });
+      }, Role.MANAGER);
 
       expect(usersService.createUser).toHaveBeenCalledWith(
         expect.objectContaining({

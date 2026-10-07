@@ -32,6 +32,7 @@ describe('MANAGER ONBOARDING REGISTRATION SUITE', () => {
     });
 
     usersService = {
+      assertCanCreateUser: vi.fn(),
       findByPhoneNumber: vi.fn(async (phone: string) => {
         for (const u of usersDb.values()) {
           if (u.phoneNumber === phone) return u;
@@ -90,7 +91,7 @@ describe('MANAGER ONBOARDING REGISTRATION SUITE', () => {
       role: Role.TECHNICIAN,
     };
 
-    const res = await authService.register(registerDto);
+    const res = await authService.register(registerDto, Role.MANAGER);
 
     // 1. Phản hồi thành công đúng định dạng
     expect(res).toBeDefined();
@@ -147,7 +148,7 @@ describe('MANAGER ONBOARDING REGISTRATION SUITE', () => {
       role: Role.FARMER,
     };
 
-    await expect(authService.register(registerDto)).rejects.toThrow(
+    await expect(authService.register(registerDto, Role.MANAGER)).rejects.toThrow(
       'Số điện thoại này đã được đăng ký!',
     );
 
@@ -169,7 +170,7 @@ describe('MANAGER ONBOARDING REGISTRATION SUITE', () => {
       role: Role.FARMER,
     };
 
-    await expect(authService.register(registerDto)).rejects.toThrow(
+    await expect(authService.register(registerDto, Role.MANAGER)).rejects.toThrow(
       'Email này đã được sử dụng bởi tài khoản khác!',
     );
 
@@ -185,7 +186,7 @@ describe('MANAGER ONBOARDING REGISTRATION SUITE', () => {
       role: Role.FARMER,
     };
 
-    await expect(authService.register(registerDto)).rejects.toThrow(
+    await expect(authService.register(registerDto, Role.MANAGER)).rejects.toThrow(
       'Số điện thoại không hợp lệ!',
     );
 
@@ -200,7 +201,7 @@ describe('MANAGER ONBOARDING REGISTRATION SUITE', () => {
       role: Role.FARMER,
     };
 
-    const res = await authService.register(registerDto);
+    const res = await authService.register(registerDto, Role.MANAGER);
     expect(res.phoneNumber).toBe('0987654321');
     expect(usersService.createUser).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -222,7 +223,7 @@ describe('MANAGER ONBOARDING REGISTRATION SUITE', () => {
       role: Role.TECHNICIAN,
     };
 
-    await expect(authService.register(registerDto)).rejects.toThrow(
+    await expect(authService.register(registerDto, Role.MANAGER)).rejects.toThrow(
       'Không thể gửi email mật khẩu khởi tạo. Vui lòng thử lại sau!',
     );
   });
@@ -239,7 +240,7 @@ describe('MANAGER ONBOARDING REGISTRATION SUITE', () => {
       role: Role.TECHNICIAN,
     };
 
-    await expect(authService.register(registerDto)).rejects.toThrow(
+    await expect(authService.register(registerDto, Role.MANAGER)).rejects.toThrow(
       'DB connection pool exhausted',
     );
     expect(emailService.sendInitialPassword).not.toHaveBeenCalled();

@@ -29,6 +29,46 @@ export class UsersService {
     return safeUser;
   }
 
+  /**
+   * Account-management policy. Managers may manage FARMER and MANAGER
+   * accounts, but never create or manage ADMIN accounts. ADMIN retains the
+   * pre-existing ability to manage every role.
+   */
+  assertCanCreateUser(actorRole: Role, requestedRole: Role | undefined): void {
+    if (actorRole === Role.ADMIN) {
+      return;
+    }
+
+    if (
+      actorRole !== Role.MANAGER ||
+      requestedRole === Role.ADMIN
+    ) {
+      throw new ForbiddenException(
+        'Bạn không có quyền tạo tài khoản với vai trò này!',
+      );
+    }
+  }
+
+  assertCanManageUser(
+    actorRole: Role,
+    targetRole: Role,
+    requestedRole?: Role,
+  ): void {
+    if (actorRole === Role.ADMIN) {
+      return;
+    }
+
+    if (
+      actorRole !== Role.MANAGER ||
+      targetRole === Role.ADMIN ||
+      requestedRole === Role.ADMIN
+    ) {
+      throw new ForbiddenException(
+        'Bạn không có quyền quản lý tài khoản quản trị viên!',
+      );
+    }
+  }
+
   // Tìm người dùng theo số điện thoại
   async findByPhoneNumber(
     phoneNumber: string,
@@ -185,8 +225,10 @@ export class UsersService {
 
   // Quản trị viên tạo người dùng mới
   async createUserByAdmin(
+    actorRole: Role,
     dto: CreateUserDto,
   ): Promise<Omit<User, 'passwordHash'>> {
+    this.assertCanCreateUser(actorRole, dto.role);
     const existing = await this.findByPhoneNumber(dto.phoneNumber);
     if (existing) {
       throw new ConflictException('Số điện thoại này đã được đăng ký!');
@@ -308,6 +350,7 @@ export class UsersService {
 
   // Quản trị viên cập nhật thông tin/trạng thái tài khoản người dùng
   async adminUpdateUser(
+    actorRole: Role,
     userId: string,
     adminUpdateUserDto: AdminUpdateUserDto,
   ): Promise<Omit<User, 'passwordHash'>> {
@@ -315,6 +358,8 @@ export class UsersService {
     if (!user) {
       throw new NotFoundException('Không tìm thấy người dùng!');
     }
+
+    this.assertCanManageUser(actorRole, user.role, adminUpdateUserDto.role);
 
     let shouldInvalidateTokens = false;
 
@@ -401,11 +446,16 @@ export class UsersService {
   }
 
   // Quản trị viên xóa người dùng
-  async deleteUser(userId: string): Promise<{ message: string }> {
+  async deleteUser(
+    actorRole: Role,
+    userId: string,
+  ): Promise<{ message: string }> {
     const user = await this.findById(userId);
     if (!user) {
       throw new NotFoundException('Không tìm thấy người dùng!');
     }
+
+    this.assertCanManageUser(actorRole, user.role);
 
     await this.usersRepository.remove(user);
     return { message: 'Xóa người dùng thành công!' };

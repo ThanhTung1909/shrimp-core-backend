@@ -72,6 +72,7 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
     sessionsStore = [];
 
     usersService = {
+      assertCanCreateUser: vi.fn(),
       findById: vi.fn(async (userId: string) => {
         for (const u of usersStore.values()) {
           if (u.userId === userId) return u;
@@ -381,7 +382,7 @@ describe('REDIS SECURITY HARDENING SUITE (PHASE 8 - STEP 8)', () => {
       phoneNumber: phone,
       email: 'onboard@test.com',
       role: Role.FARMER,
-    });
+    }, Role.MANAGER);
 
     expect(res).toHaveProperty('userId');
     expect(res).toHaveProperty('phoneNumber', phone);

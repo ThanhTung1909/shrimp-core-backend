@@ -204,9 +204,10 @@ export class AuthController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.MANAGER)
   async register(
+    @CurrentUser('role') actorRole: Role,
     @Body() registerDto: RegisterDto,
     @Ip() ip?: string,
-    @Headers('user-agent') userAgent?: string,
+    @Headers('user-agent') _userAgent?: string,
   ): Promise<{
     message: string;
     userId: string;
@@ -220,7 +221,7 @@ export class AuthController {
       RATE_LIMIT_CONFIG.REGISTER.IP_LIMIT,
       RATE_LIMIT_CONFIG.REGISTER.IP_WINDOW,
     );
-    return this.authService.register(registerDto, userAgent);
+    return this.authService.register(registerDto, actorRole);
   }
 
   @Public()

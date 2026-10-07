@@ -1,8 +1,12 @@
-import { ExecutionContext, Injectable } from '@nestjs/common';
+import {
+  ExecutionContext,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
-import { Observable } from 'rxjs';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator.js';
+import { ALLOW_MUST_CHANGE_PASSWORD_KEY } from '../decorators/allow-must-change-password.decorator.js';
 
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
@@ -10,9 +14,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     super();
   }
 
-  override canActivate(
-    context: ExecutionContext,
-  ): boolean | Promise<boolean> | Observable<boolean> {
+  override async canActivate(context: ExecutionContext): Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
       context.getHandler(),
       context.getClass(),
@@ -22,6 +24,26 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
       return true;
     }
 
-    return super.canActivate(context);
+    const authenticated = await (super.canActivate(
+      context,
+    ) as Promise<boolean>);
+    if (!authenticated) {
+      return false;
+    }
+
+    const allowMustChangePassword = this.reflector.getAllAndOverride<boolean>(
+      ALLOW_MUST_CHANGE_PASSWORD_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    const user = context.switchToHttp().getRequest().user as
+      { mustChangePassword?: boolean } | undefined;
+
+    if (user?.mustChangePassword && !allowMustChangePassword) {
+      throw new ForbiddenException(
+        'Bạn phải thay đổi mật khẩu trước khi sử dụng chức năng này!',
+      );
+    }
+
+    return true;
   }
-}
+}

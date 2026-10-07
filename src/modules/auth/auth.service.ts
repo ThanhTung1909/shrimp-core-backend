@@ -291,7 +291,7 @@ export class AuthService {
   // Hàm đăng ký tài khoản (Tự động sinh mật khẩu, lưu DB bằng transaction, gửi mật khẩu qua email)
   async register(
     registerDto: RegisterDto,
-    _deviceName?: string | null,
+    actorRole: Role,
   ): Promise<{
     message: string;
     userId: string;
@@ -300,6 +300,8 @@ export class AuthService {
     email: string | null;
     role: Role;
   }> {
+    this.userService.assertCanCreateUser(actorRole, registerDto.role);
+
     const normalizedPhone = normalizePhone(registerDto.phoneNumber);
     if (!normalizedPhone) {
       throw new BadRequestException('Số điện thoại không hợp lệ!');
