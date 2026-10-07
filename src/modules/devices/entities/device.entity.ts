@@ -2,6 +2,8 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
+  CreateDateColumn,
+  UpdateDateColumn,
   ManyToOne,
   OneToMany,
   JoinColumn,
@@ -19,8 +21,8 @@ export class Device {
   @PrimaryGeneratedColumn('uuid', { name: 'device_id' })
   deviceId: string;
 
-  @Column({ type: 'uuid', name: 'pond_id' })
-  pondId: string;
+  @Column({ type: 'uuid', name: 'pond_id', nullable: true })
+  pondId: string | null;
 
   @Column({ name: 'device_name', type: 'varchar', length: 100 })
   deviceName: string;
@@ -51,9 +53,26 @@ export class Device {
   })
   lastActiveAt: Date | null;
 
-  @ManyToOne(() => Pond, (pond) => pond.devices, { onDelete: 'CASCADE' })
+  @CreateDateColumn({
+    name: 'created_at',
+    type: 'timestamp with time zone',
+    default: () => 'now()',
+  })
+  createdAt: Date;
+
+  @UpdateDateColumn({
+    name: 'updated_at',
+    type: 'timestamp with time zone',
+    default: () => 'now()',
+  })
+  updatedAt: Date;
+
+  @ManyToOne(() => Pond, (pond) => pond.devices, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'pond_id' })
-  pond: Relation<Pond>;
+  pond: Relation<Pond> | null;
 
   @OneToMany(() => TelemetryData, (telemetry) => telemetry.device)
   telemetries: Relation<TelemetryData>[];
@@ -61,4 +80,5 @@ export class Device {
   @OneToMany(() => Alert, (alert) => alert.device)
   alerts: Relation<Alert>[];
 }
+
 

@@ -50,10 +50,13 @@ import { Gender } from '../../common/enums/gender.enum.js';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+
 export interface AuthenticatedRequest extends Request {
   user: Omit<User, 'passwordHash'>;
 }
 
+@ApiTags('Auth - Xác Thực & Phân Quyền')
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -134,6 +137,9 @@ export class AuthController {
 
   @Public()
   @Post('send-otp')
+  @ApiOperation({ summary: 'Gửi mã xác thực OTP qua SMS/Email' })
+  @ApiResponse({ status: 200, description: 'Gửi mã OTP thành công' })
+  @ApiResponse({ status: 429, description: 'Gửi quá nhiều yêu cầu OTP' })
   async sendOtp(
     @Body() sendOtpDto: SendOtpDto,
     @Ip() ip?: string,
@@ -188,6 +194,9 @@ export class AuthController {
 
   @Public()
   @Post('verify-otp')
+  @ApiOperation({ summary: 'Xác thực mã OTP' })
+  @ApiResponse({ status: 200, description: 'Xác thực mã OTP hợp lệ thành công' })
+  @ApiResponse({ status: 400, description: 'Mã OTP không hợp lệ hoặc đã hết hạn' })
   async verifyOtp(
     @Body() verifyOtpDto: VerifyOtpDto,
     @Headers('user-agent') userAgent?: string,
@@ -201,8 +210,12 @@ export class AuthController {
   }
 
   @Post('register')
+  @ApiBearerAuth('JWT-auth')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.MANAGER)
+  @ApiOperation({ summary: 'Quản trị viên đăng ký tài khoản người dùng mới' })
+  @ApiResponse({ status: 201, description: 'Tạo tài khoản thành công' })
+  @ApiResponse({ status: 409, description: 'Số điện thoại hoặc email đã được sử dụng' })
   async register(
     @CurrentUser('role') actorRole: Role,
     @Body() registerDto: RegisterDto,
@@ -226,6 +239,9 @@ export class AuthController {
 
   @Public()
   @Post('login')
+  @ApiOperation({ summary: 'Đăng nhập hệ thống bằng số điện thoại và mật khẩu' })
+  @ApiResponse({ status: 200, description: 'Đăng nhập thành công trả về cặp Access & Refresh tokens' })
+  @ApiResponse({ status: 401, description: 'Sai số điện thoại hoặc mật khẩu' })
   async login(
     @Body() loginDto: LoginDto,
     @Ip() ip?: string,
@@ -253,10 +269,11 @@ export class AuthController {
     return this.authService.login(loginDto, userAgent);
   }
 
-
-
   @Public()
   @Post('refresh')
+  @ApiOperation({ summary: 'Làm mới Access Token bằng Refresh Token' })
+  @ApiResponse({ status: 200, description: 'Cấp mới thành công cặp Access & Refresh tokens' })
+  @ApiResponse({ status: 401, description: 'Refresh token không hợp lệ hoặc đã bị thu hồi' })
   async refreshToken(
     @Body() refreshTokenDto: RefreshTokenDto,
     @Ip() ip?: string,
@@ -274,6 +291,8 @@ export class AuthController {
 
   @Public()
   @Post('reset-password')
+  @ApiOperation({ summary: 'Đặt lại mật khẩu mới thông qua OTP xác thực' })
+  @ApiResponse({ status: 200, description: 'Đặt lại mật khẩu thành công' })
   async resetPassword(
     @Body() resetPasswordDto: ResetPasswordDto,
   ): Promise<{ message: string }> {
@@ -281,8 +300,12 @@ export class AuthController {
   }
 
   @Get('me')
+  @ApiBearerAuth('JWT-auth')
   @UseGuards(JwtAuthGuard)
   @AllowMustChangePassword()
+  @ApiOperation({ summary: 'Lấy thông tin tài khoản người dùng đang đăng nhập' })
+  @ApiResponse({ status: 200, description: 'Trả về profile thông tin cá nhân' })
+  @ApiResponse({ status: 401, description: 'Chưa đăng nhập hoặc token đã hết hạn' })
   async me(@Req() req: AuthenticatedRequest): Promise<{
     userId: string;
     fullName: string;
@@ -311,8 +334,12 @@ export class AuthController {
   }
 
   @Post('change-password')
+  @ApiBearerAuth('JWT-auth')
   @UseGuards(JwtAuthGuard)
   @AllowMustChangePassword()
+  @ApiOperation({ summary: 'Đổi mật khẩu người dùng' })
+  @ApiResponse({ status: 200, description: 'Đổi mật khẩu thành công' })
+  @ApiResponse({ status: 400, description: 'Mật khẩu cũ không chính xác' })
   async changePassword(
     @CurrentUser('userId') userId: string,
     @Body() changePasswordDto: ChangePasswordDto,
@@ -331,8 +358,11 @@ export class AuthController {
   }
 
   @Post('logout')
+  @ApiBearerAuth('JWT-auth')
   @UseGuards(JwtAuthGuard)
   @AllowMustChangePassword()
+  @ApiOperation({ summary: 'Đăng xuất khỏi thiết bị hiện tại (Vô hiệu hóa Refresh Token)' })
+  @ApiResponse({ status: 200, description: 'Đăng xuất thành công' })
   async logout(
     @CurrentUser('userId') userId: string,
     @Body() logoutDto: LogoutDto,
@@ -349,8 +379,11 @@ export class AuthController {
   }
 
   @Post('logout-all')
+  @ApiBearerAuth('JWT-auth')
   @UseGuards(JwtAuthGuard)
   @AllowMustChangePassword()
+  @ApiOperation({ summary: 'Đăng xuất khỏi tất cả các thiết bị đang đăng nhập' })
+  @ApiResponse({ status: 200, description: 'Đăng xuất tất cả thiết bị thành công' })
   async logoutAll(@CurrentUser('userId') userId: string): Promise<{ message: string }> {
     return this.authService.logoutAll(userId);
   }

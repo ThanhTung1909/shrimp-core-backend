@@ -2,6 +2,7 @@ import {
   ExecutionContext,
   ForbiddenException,
   Injectable,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
@@ -24,9 +25,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
       return true;
     }
 
-    const authenticated = await (super.canActivate(
-      context,
-    ) as Promise<boolean>);
+    const authenticated = await Promise.resolve(super.canActivate(context));
     if (!authenticated) {
       return false;
     }
@@ -35,8 +34,10 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
       ALLOW_MUST_CHANGE_PASSWORD_KEY,
       [context.getHandler(), context.getClass()],
     );
+
     const user = context.switchToHttp().getRequest().user as
-      { mustChangePassword?: boolean } | undefined;
+      | { mustChangePassword?: boolean }
+      | undefined;
 
     if (user?.mustChangePassword && !allowMustChangePassword) {
       throw new ForbiddenException(
@@ -45,5 +46,18 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     }
 
     return true;
+  }
+
+  override handleRequest<TUser = any>(err: any, user: any, info: any): TUser {
+    if (err || !user) {
+      throw (
+        err ||
+        new UnauthorizedException(
+          'Phiên làm việc không hợp lệ hoặc đã hết hạn!',
+        )
+      );
+    }
+
+    return user;
   }
 }

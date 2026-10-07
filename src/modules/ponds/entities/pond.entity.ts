@@ -3,6 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  UpdateDateColumn,
   ManyToOne,
   OneToMany,
   JoinColumn,
@@ -24,8 +25,14 @@ export class Pond {
   @Column({ type: 'uuid', name: 'user_id' })
   userId: string;
 
-  @Column({ name: 'pond_name', type: 'varchar', length: 100 })
+  @Column({ name: 'pond_name', type: 'varchar', length: 100, unique: true })
   pondName: string;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  location: string | null;
+
+  @Column({ type: 'int', nullable: true })
+  capacity: number | null;
 
   @Column({ name: 'area_m2', type: 'double precision' })
   areaM2: number;
@@ -50,6 +57,9 @@ export class Pond {
     default: () => 'now()',
   })
   createdAt: Date;
+
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamp with time zone' })
+  updatedAt: Date;
 
   @ManyToOne(() => User, (user) => user.ponds, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
