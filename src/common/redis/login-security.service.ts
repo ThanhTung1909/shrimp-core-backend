@@ -3,6 +3,8 @@ import { RedisService } from './redis.service.js';
 
 @Injectable()
 export class LoginSecurityService {
+  private static readonly FAILURE_COUNTER_TTL_SECONDS = 24 * 60 * 60;
+
   constructor(private readonly redisService: RedisService) {}
 
   private getFailKey(userId: string): string {
@@ -22,7 +24,16 @@ export class LoginSecurityService {
   async recordFailure(userId: string): Promise<number> {
     const failKey = this.getFailKey(userId);
     const client = this.redisService.getClient();
-    return await client.incr(failKey);
+    const attempts = await client.incr(failKey);
+
+    if (attempts === 1) {
+      await client.expire(
+        failKey,
+        LoginSecurityService.FAILURE_COUNTER_TTL_SECONDS,
+      );
+    }
+
+    return attempts;
   }
 
   async createTemporaryLock(userId: string, seconds: number): Promise<void> {
