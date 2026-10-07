@@ -9,6 +9,20 @@ import { QueryTelemetryDto } from './dto/query-telemetry.dto.js';
 import { Alert } from '../alerts/entities/alert.entity.js';
 import { AlertLevel } from '../../common/enums/alert-level.enum.js';
 import { AlertStatus } from '../../common/enums/alert-status.enum.js';
+import { ThresholdConfig } from '../ponds/entities/threshold-config.entity.js';
+import { AlertsService } from '../alerts/alerts.service.js';
+import { RedisService } from '../../common/redis/redis.service.js';
+
+const THRESHOLD_COOLDOWN_SECONDS = 15 * 60;
+const THRESHOLD_METRICS = [
+  { property: 'temperature', normalized: 'temperature' },
+  { property: 'ph', normalized: 'ph' },
+  { property: 'dissolvedOxygen', normalized: 'dissolvedoxygen' },
+  { property: 'salinity', normalized: 'salinity' },
+  { property: 'turbidity', normalized: 'turbidity' },
+] as const;
+
+type ThresholdMetricProperty = (typeof THRESHOLD_METRICS)[number]['property'];
 
 @Injectable()
 export class TelemetryService implements OnModuleInit {
@@ -21,7 +35,11 @@ export class TelemetryService implements OnModuleInit {
     private readonly deviceRepo: Repository<Device>,
     @InjectRepository(Alert)
     private readonly alertRepo: Repository<Alert>,
+    @InjectRepository(ThresholdConfig)
+    private readonly thresholdConfigRepo: Repository<ThresholdConfig>,
     private readonly dataSource: DataSource,
+    private readonly alertsService: AlertsService,
+    private readonly redisService: RedisService,
   ) { }
 
   async onModuleInit() {
@@ -112,7 +130,97 @@ export class TelemetryService implements OnModuleInit {
       `[Telemetry] Đã lưu dữ liệu cảm biến cho thiết bị ${dto.deviceId} vào TimescaleDB.`,
     );
 
+    await this.evaluateThresholds(device, dto);
+
     return savedRecord;
+  }
+
+  private normalizeMetricName(metricName: string): string {
+    const normalized = metricName.toLowerCase().replace(/[\s_-]/g, '');
+    if (normalized === 'temp') return 'temperature';
+    if (normalized === 'do') return 'dissolvedoxygen';
+    return normalized;
+  }
+
+  private async evaluateThresholds(device: Device, dto: CreateTelemetryDto): Promise<void> {
+    if (!device.pondId) return;
+
+    try {
+      const configs = await this.thresholdConfigRepo.find({
+        where: { pondId: device.pondId, isActive: true },
+      });
+      const configsByMetric = new Map<string, ThresholdConfig>();
+      for (const config of configs) {
+        if (!config.isActive) continue;
+        const normalizedName = this.normalizeMetricName(config.metricName);
+        if (!configsByMetric.has(normalizedName)) {
+          configsByMetric.set(normalizedName, config);
+        }
+      }
+
+      for (const metric of THRESHOLD_METRICS) {
+        const value = dto[metric.property as ThresholdMetricProperty];
+        if (value === null || value === undefined) continue;
+
+        const config = configsByMetric.get(metric.normalized);
+        if (!config) continue;
+
+        const numericValue = Number(value);
+        const minValue = Number(config.minValue);
+        const maxValue = Number(config.maxValue);
+        const direction = numericValue < minValue ? 'LOW' : numericValue > maxValue ? 'HIGH' : null;
+        if (!direction) continue;
+
+        await this.createThresholdAlert(device, config, metric.normalized, numericValue, direction);
+      }
+    } catch (error) {
+      this.logger.error(
+        `[Alert Engine] Không thể đánh giá ngưỡng cho thiết bị ${device.deviceId}; dữ liệu telemetry đã được lưu.`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  private async createThresholdAlert(
+    device: Device,
+    config: ThresholdConfig,
+    normalizedMetric: string,
+    triggeredValue: number,
+    direction: 'LOW' | 'HIGH',
+  ): Promise<void> {
+    const cooldownKey = `alert:cooldown:${config.pondId}:${device.deviceId}:${normalizedMetric}:${direction}`;
+    let cooldownSet = false;
+
+    try {
+      cooldownSet = await this.redisService.setIfAbsent(
+        cooldownKey,
+        '1',
+        THRESHOLD_COOLDOWN_SECONDS,
+      );
+      if (!cooldownSet) return;
+
+      await this.alertsService.createThresholdAlert({
+        pondId: config.pondId,
+        deviceId: device.deviceId,
+        metricName: config.metricName,
+        triggeredValue,
+        minValue: Number(config.minValue),
+        maxValue: Number(config.maxValue),
+        direction,
+      });
+    } catch (error) {
+      if (cooldownSet) {
+        try {
+          await this.redisService.del(cooldownKey);
+        } catch (cleanupError) {
+          this.logger.error(
+            `[Alert Engine] Không thể xóa cooldown lỗi cho ${cooldownKey}.`,
+            cleanupError instanceof Error ? cleanupError.stack : String(cleanupError),
+          );
+        }
+      }
+      throw error;
+    }
   }
 
   /**

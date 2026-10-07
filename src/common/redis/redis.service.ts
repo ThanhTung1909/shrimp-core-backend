@@ -95,6 +95,14 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Đặt key có TTL chỉ khi key chưa tồn tại. Đây là một thao tác Redis nguyên tử.
+   */
+  async setIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    const result = await this.client.set(key, value, 'EX', ttlSeconds, 'NX');
+    return result === 'OK';
+  }
+
+  /**
    * Xóa một hoặc nhiều key khỏi Redis.
    */
   async del(...keys: string[]): Promise<number> {

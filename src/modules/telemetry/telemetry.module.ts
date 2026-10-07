@@ -7,9 +7,11 @@ import { TelemetryMqttService } from './telemetry-mqtt.service.js';
 import { TelemetryController } from './telemetry.controller.js';
 import { Alert } from '../alerts/entities/alert.entity.js';
 import { DeviceHealthService } from './device-health.service.js';
+import { ThresholdConfig } from '../ponds/entities/threshold-config.entity.js';
+import { AlertsModule } from '../alerts/alerts.module.js';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([TelemetryData, Device, Alert])],
+  imports: [TypeOrmModule.forFeature([TelemetryData, Device, Alert, ThresholdConfig]), AlertsModule],
   controllers: [TelemetryController],
   providers: [TelemetryService, TelemetryMqttService, DeviceHealthService],
   exports: [TelemetryService, TelemetryMqttService, TypeOrmModule],

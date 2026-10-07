@@ -8,7 +8,10 @@ describe('TelemetryService', () => {
   let mockTelemetryRepo: any;
   let mockDeviceRepo: any;
   let mockAlertRepo: any;
+  let mockThresholdConfigRepo: any;
   let mockDataSource: any;
+  let mockAlertsService: any;
+  let mockRedisService: any;
 
   beforeEach(() => {
     mockTelemetryRepo = {
@@ -35,11 +38,21 @@ describe('TelemetryService', () => {
       query: vi.fn().mockResolvedValue([{ count: '1' }]),
     };
 
+    mockThresholdConfigRepo = { find: vi.fn().mockResolvedValue([]) };
+    mockAlertsService = { createThresholdAlert: vi.fn().mockResolvedValue({ alertId: 'alert-1' }) };
+    mockRedisService = {
+      setIfAbsent: vi.fn().mockResolvedValue(true),
+      del: vi.fn().mockResolvedValue(1),
+    };
+
     service = new TelemetryService(
       mockTelemetryRepo,
       mockDeviceRepo,
       mockAlertRepo,
+      mockThresholdConfigRepo,
       mockDataSource,
+      mockAlertsService,
+      mockRedisService,
     );
   });
 
@@ -61,6 +74,7 @@ describe('TelemetryService', () => {
       });
       expect(mockTelemetryRepo.save).not.toHaveBeenCalled();
       expect(mockDeviceRepo.update).not.toHaveBeenCalled();
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
     });
 
     it('nên lưu trữ dữ liệu vào TimescaleDB và cập nhật thiết bị sang ONLINE khi deviceId hợp lệ', async () => {
@@ -90,6 +104,151 @@ describe('TelemetryService', () => {
           status: DeviceStatus.ONLINE,
         }),
       );
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+    });
+
+    it('lưu telemetry cho thiết bị không có ao và không đánh giá ngưỡng', async () => {
+      mockDeviceRepo.findOne.mockResolvedValue({ deviceId: 'device-1', pondId: null });
+
+      const result = await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 30 });
+
+      expect(result).not.toBeNull();
+      expect(mockThresholdConfigRepo.find).not.toHaveBeenCalled();
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['in-range', 25, 20, 30],
+      ['exactly min', 20, 20, 30],
+      ['exactly max', 30, 20, 30],
+    ])('does not create an alert for %s value', async (_description, value, minValue, maxValue) => {
+      mockDeviceRepo.findOne.mockResolvedValue({ deviceId: 'device-1', pondId: 'pond-1' });
+      mockThresholdConfigRepo.find.mockResolvedValue([
+        { pondId: 'pond-1', metricName: 'temperature', minValue, maxValue, isActive: true },
+      ]);
+
+      await service.processTelemetryPayload({ deviceId: 'device-1', temperature: value });
+
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+      expect(mockRedisService.setIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['below', 19, 'LOW'],
+      ['above', 31, 'HIGH'],
+    ])('creates a WARNING threshold alert when temperature is %s range', async (_description, value, direction) => {
+      mockDeviceRepo.findOne.mockResolvedValue({ deviceId: 'device-1', pondId: 'pond-1' });
+      mockThresholdConfigRepo.find.mockResolvedValue([
+        { pondId: 'pond-1', metricName: 'temperature', minValue: 20, maxValue: 30, isActive: true },
+      ]);
+
+      await service.processTelemetryPayload({ deviceId: 'device-1', temperature: value });
+
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:pond-1:device-1:temperature:${direction}`,
+        '1',
+        900,
+      );
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(expect.objectContaining({
+        metricName: 'temperature', triggeredValue: value, direction,
+      }));
+    });
+
+    it('ignores null and undefined telemetry metrics', async () => {
+      mockDeviceRepo.findOne.mockResolvedValue({ deviceId: 'device-1', pondId: 'pond-1' });
+      mockThresholdConfigRepo.find.mockResolvedValue([
+        { pondId: 'pond-1', metricName: 'temperature', minValue: 20, maxValue: 30, isActive: true },
+        { pondId: 'pond-1', metricName: 'pH', minValue: 7, maxValue: 8, isActive: true },
+      ]);
+
+      await service.processTelemetryPayload({ deviceId: 'device-1', temperature: null as any, ph: undefined });
+
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+    });
+
+    it('ignores inactive and unsupported waterLevel threshold configurations', async () => {
+      mockDeviceRepo.findOne.mockResolvedValue({ deviceId: 'device-1', pondId: 'pond-1' });
+      mockThresholdConfigRepo.find.mockResolvedValue([
+        { pondId: 'pond-1', metricName: 'temperature', minValue: 20, maxValue: 30, isActive: false },
+        { pondId: 'pond-1', metricName: 'waterLevel', minValue: 1, maxValue: 2, isActive: true },
+      ]);
+
+      await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 35, waterLevel: 3 });
+
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+    });
+
+    it('supports existing pH, DO and temp stored metric names', async () => {
+      mockDeviceRepo.findOne.mockResolvedValue({ deviceId: 'device-1', pondId: 'pond-1' });
+      mockThresholdConfigRepo.find.mockResolvedValue([
+        { pondId: 'pond-1', metricName: 'pH', minValue: 7, maxValue: 8, isActive: true },
+        { pondId: 'pond-1', metricName: 'DO', minValue: 4, maxValue: 8, isActive: true },
+        { pondId: 'pond-1', metricName: 'temp', minValue: 20, maxValue: 30, isActive: true },
+      ]);
+
+      await service.processTelemetryPayload({ deviceId: 'device-1', ph: 6, dissolvedOxygen: 3, temperature: 31 });
+
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(3);
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(expect.objectContaining({ metricName: 'pH' }));
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(expect.objectContaining({ metricName: 'DO' }));
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(expect.objectContaining({ metricName: 'temp' }));
+    });
+
+    it('suppresses repeated violations within the cooldown, but allows another after it expires', async () => {
+      mockDeviceRepo.findOne.mockResolvedValue({ deviceId: 'device-1', pondId: 'pond-1' });
+      mockThresholdConfigRepo.find.mockResolvedValue([
+        { pondId: 'pond-1', metricName: 'temperature', minValue: 20, maxValue: 30, isActive: true },
+      ]);
+      mockRedisService.setIfAbsent.mockResolvedValueOnce(true).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+      await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 19 });
+      await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 19 });
+      await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 19 });
+
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(2);
+    });
+
+    it('uses distinct cooldown identities for direction, device, and pond', async () => {
+      const config = { pondId: 'pond-1', metricName: 'temperature', minValue: 20, maxValue: 30, isActive: true };
+      mockDeviceRepo.findOne.mockResolvedValueOnce({ deviceId: 'device-1', pondId: 'pond-1' })
+        .mockResolvedValueOnce({ deviceId: 'device-1', pondId: 'pond-2' })
+        .mockResolvedValueOnce({ deviceId: 'device-2', pondId: 'pond-1' });
+      mockThresholdConfigRepo.find.mockResolvedValueOnce([config])
+        .mockResolvedValueOnce([{ ...config, pondId: 'pond-2' }])
+        .mockResolvedValueOnce([config]);
+
+      await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 19 });
+      await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 31 });
+      await service.processTelemetryPayload({ deviceId: 'device-2', temperature: 19 });
+
+      expect(mockRedisService.setIfAbsent.mock.calls.map((call: any[]) => call[0])).toEqual([
+        'alert:cooldown:pond-1:device-1:temperature:LOW',
+        'alert:cooldown:pond-2:device-1:temperature:HIGH',
+        'alert:cooldown:pond-1:device-2:temperature:LOW',
+      ]);
+    });
+
+    it('keeps saved telemetry successful when alert engine fails', async () => {
+      mockDeviceRepo.findOne.mockResolvedValue({ deviceId: 'device-1', pondId: 'pond-1' });
+      mockThresholdConfigRepo.find.mockRejectedValue(new Error('Redis unavailable'));
+
+      const result = await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 19 });
+
+      expect(result).not.toBeNull();
+      expect(mockTelemetryRepo.save).toHaveBeenCalled();
+    });
+
+    it('removes the cooldown when alert persistence fails so a retry is not suppressed', async () => {
+      mockDeviceRepo.findOne.mockResolvedValue({ deviceId: 'device-1', pondId: 'pond-1' });
+      mockThresholdConfigRepo.find.mockResolvedValue([
+        { pondId: 'pond-1', metricName: 'temperature', minValue: 20, maxValue: 30, isActive: true },
+      ]);
+      mockAlertsService.createThresholdAlert.mockRejectedValueOnce(new Error('database unavailable'));
+
+      const result = await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 19 });
+
+      expect(result).not.toBeNull();
+      expect(mockRedisService.del).toHaveBeenCalledWith('alert:cooldown:pond-1:device-1:temperature:LOW');
     });
   });
 

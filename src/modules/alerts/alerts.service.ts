@@ -5,6 +5,17 @@ import { Alert } from './entities/alert.entity.js';
 import { QueryAlertDto } from './dto/query-alert.dto.js';
 import { ResolveAlertDto } from './dto/resolve-alert.dto.js';
 import { AlertStatus } from '../../common/enums/alert-status.enum.js';
+import { AlertLevel } from '../../common/enums/alert-level.enum.js';
+
+export interface CreateThresholdAlertInput {
+  pondId: string;
+  deviceId: string;
+  metricName: string;
+  triggeredValue: number;
+  minValue: number;
+  maxValue: number;
+  direction: 'LOW' | 'HIGH';
+}
 
 @Injectable()
 export class AlertsService {
@@ -12,6 +23,22 @@ export class AlertsService {
     @InjectRepository(Alert)
     private readonly alertRepo: Repository<Alert>,
   ) {}
+
+  async createThresholdAlert(input: CreateThresholdAlertInput): Promise<Alert> {
+    const boundary = input.direction === 'LOW' ? input.minValue : input.maxValue;
+    const comparison = input.direction === 'LOW' ? 'thấp hơn' : 'cao hơn';
+    const alert = this.alertRepo.create({
+      pondId: input.pondId,
+      deviceId: input.deviceId,
+      metricName: input.metricName,
+      triggeredValue: input.triggeredValue,
+      alertLevel: AlertLevel.WARNING,
+      status: AlertStatus.ACTIVE,
+      message: `Chỉ số ${input.metricName} đo được ${input.triggeredValue}, ${comparison} ngưỡng ${boundary} (khoảng cho phép ${input.minValue} - ${input.maxValue}).`,
+    });
+
+    return this.alertRepo.save(alert);
+  }
 
   async findAll(query: QueryAlertDto): Promise<{ data: Alert[]; total: number }> {
     const { page = 1, limit = 20, deviceId, isResolved } = query;
