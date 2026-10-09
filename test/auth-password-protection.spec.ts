@@ -169,13 +169,19 @@ describe('Auth Password Protection', () => {
   });
 
   describe('OTP functions', () => {
-    it('sendOtp LOGIN: reject if isLoginLocked', async () => {
+    it('sendOtp LOGIN: hides permanent lock state and does not send OTP', async () => {
       usersService.findByPhoneNumber.mockResolvedValue({ userId: 'u1', isLoginLocked: true });
 
-      await expect(
-        authService.sendOtp({ phoneNumber: '000', purpose: OtpPurpose.LOGIN })
-      ).rejects.toThrow('Vui lòng liên hệ quản lý');
+      const result = await authService.sendOtp({
+        phoneNumber: '000',
+        purpose: OtpPurpose.LOGIN,
+      });
 
+      expect(result).toEqual({
+        message: 'Nếu số điện thoại hợp lệ, mã OTP đã được gửi',
+        phoneNumber: '000',
+        expiresIn: '5 phút',
+      });
       expect(otpService.createAndSaveOtp).not.toHaveBeenCalled();
     });
 

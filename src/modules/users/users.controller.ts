@@ -12,8 +12,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { UsersService } from './users.service.js';
-import { User } from './entities/user.entity.js';
+import { SafeUser, UsersService } from './users.service.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../../common/guards/roles.guard.js';
 import { Roles } from '../../common/decorators/roles.decorator.js';
@@ -43,7 +42,7 @@ export class UsersController {
     @Body() updateProfileDto: UpdateProfileDto,
   ): Promise<{
     message: string;
-    user: Omit<User, 'passwordHash'>;
+    user: SafeUser;
   }> {
     const updatedUser = await this.usersService.updateProfile(
       userId,
@@ -76,7 +75,7 @@ export class UsersController {
   @ApiResponse({ status: 200, description: 'Danh sách người dùng phân trang' })
   @ApiResponse({ status: 403, description: 'Không có quyền truy cập' })
   async getAllUsers(@Query() query: FindUsersQueryDto): Promise<{
-    data: Omit<User, 'passwordHash'>[];
+    data: SafeUser[];
     total: number;
     page: number;
     limit: number;
@@ -96,7 +95,7 @@ export class UsersController {
     @Body() createUserDto: CreateUserDto,
   ): Promise<{
     message: string;
-    user: Omit<User, 'passwordHash'>;
+    user: SafeUser;
   }> {
     const newUser = await this.usersService.createUserByAdmin(
       actorRole,
@@ -117,8 +116,12 @@ export class UsersController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') currentUserId: string,
     @CurrentUser('role') role: Role,
-  ): Promise<Omit<User, 'passwordHash'>> {
-    if (role !== Role.MANAGER && currentUserId !== id) {
+  ): Promise<SafeUser> {
+    if (
+      role !== Role.ADMIN &&
+      role !== Role.MANAGER &&
+      currentUserId !== id
+    ) {
       throw new ForbiddenException(
         'Bạn không có quyền truy cập thông tin của người dùng khác!',
       );
@@ -141,7 +144,7 @@ export class UsersController {
     @Body() adminUpdateUserDto: AdminUpdateUserDto,
   ): Promise<{
     message: string;
-    user: Omit<User, 'passwordHash'>;
+    user: SafeUser;
   }> {
     const updatedUser = await this.usersService.adminUpdateUser(
       actorRole,

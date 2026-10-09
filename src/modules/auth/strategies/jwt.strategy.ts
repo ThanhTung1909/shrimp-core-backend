@@ -2,8 +2,10 @@ import { Injectable, Optional, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
-import { UsersService } from '../../users/users.service.js';
-import { User } from '../../users/entities/user.entity.js';
+import {
+  AuthenticatedUser,
+  UsersService,
+} from '../../users/users.service.js';
 import { RedisService } from '../../../common/redis/redis.service.js';
 import { getAccessTokenBlacklistKey } from '../../../common/redis/rate-limit.constants.js';
 
@@ -37,7 +39,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: JwtPayload): Promise<Omit<User, 'passwordHash'>> {
+  async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
     if (payload.type !== 'access') {
       throw new UnauthorizedException('Token không hợp lệ!');
     }
@@ -78,6 +80,6 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (user.tokenVersion !== payload.tokenVersion) {
       throw new UnauthorizedException('Token không hợp lệ!');
     }
-    return this.usersService.sanitizeUser(user);
+    return this.usersService.sanitizeAuthenticatedUser(user);
   }
 }

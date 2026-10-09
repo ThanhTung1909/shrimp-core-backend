@@ -68,6 +68,44 @@ describe('AllExceptionsFilter', () => {
     );
   });
 
+  it('preserves custom authentication code and retryAfterSeconds', () => {
+    const exception = new HttpException(
+      {
+        code: 'LOGIN_TEMPORARILY_LOCKED',
+        message: 'Tài khoản tạm thời bị khóa.',
+        retryAfterSeconds: 30,
+      },
+      HttpStatus.UNAUTHORIZED,
+    );
+
+    filter.catch(exception, mockArgumentsHost);
+
+    expect(mockResponse.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCode: HttpStatus.UNAUTHORIZED,
+        errorCode: 'LOGIN_TEMPORARILY_LOCKED',
+        message: 'Tài khoản tạm thời bị khóa.',
+        retryAfterSeconds: 30,
+      }),
+    );
+  });
+
+  it('preserves permanent login lock code without adding retryAfterSeconds', () => {
+    const exception = new HttpException(
+      {
+        code: 'LOGIN_PERMANENTLY_LOCKED',
+        message: 'Vui lòng liên hệ quản lý',
+      },
+      HttpStatus.UNAUTHORIZED,
+    );
+
+    filter.catch(exception, mockArgumentsHost);
+
+    const responseBody = mockResponse.json.mock.calls[0][0];
+    expect(responseBody.errorCode).toBe('LOGIN_PERMANENTLY_LOCKED');
+    expect(responseBody).not.toHaveProperty('retryAfterSeconds');
+  });
+
   it('should handle TypeORM QueryFailedError with unique constraint (23505)', () => {
     const queryError = new QueryFailedError('SELECT 1', [], new Error('duplicate key'));
     (queryError as any).driverError = {

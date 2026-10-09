@@ -15,6 +15,23 @@ import { CreateUserDto } from './dto/create-user.dto.js';
 import { FindUsersQueryDto } from './dto/find-users-query.dto.js';
 import * as bcrypt from 'bcrypt';
 
+export type SafeUser = Pick<
+  User,
+  | 'userId'
+  | 'fullName'
+  | 'phoneNumber'
+  | 'email'
+  | 'gender'
+  | 'dateOfBirth'
+  | 'role'
+  | 'isActive'
+  | 'mustChangePassword'
+  | 'createdAt'
+  | 'updatedAt'
+>;
+
+export type AuthenticatedUser = SafeUser & Pick<User, 'tokenVersion'>;
+
 @Injectable()
 export class UsersService {
   constructor(
@@ -24,9 +41,27 @@ export class UsersService {
   ) {}
 
   // Loại bỏ passwordHash trước khi trả về client
-  sanitizeUser(user: User): Omit<User, 'passwordHash'> {
-    const { passwordHash: _passwordHash, ...safeUser } = user;
-    return safeUser;
+  sanitizeUser(user: User): SafeUser {
+    return {
+      userId: user.userId,
+      fullName: user.fullName,
+      phoneNumber: user.phoneNumber,
+      email: user.email,
+      gender: user.gender,
+      dateOfBirth: user.dateOfBirth,
+      role: user.role,
+      isActive: user.isActive,
+      mustChangePassword: user.mustChangePassword,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    };
+  }
+
+  sanitizeAuthenticatedUser(user: User): AuthenticatedUser {
+    return {
+      ...this.sanitizeUser(user),
+      tokenVersion: user.tokenVersion,
+    };
   }
 
   /**
@@ -118,7 +153,7 @@ export class UsersService {
 
   // Lấy danh sách tất cả người dùng (hỗ trợ tìm kiếm, lọc theo vai trò, phân trang)
   async findAll(query: FindUsersQueryDto): Promise<{
-    data: Omit<User, 'passwordHash'>[];
+    data: SafeUser[];
     total: number;
     page: number;
     limit: number;
@@ -227,7 +262,7 @@ export class UsersService {
   async createUserByAdmin(
     actorRole: Role,
     dto: CreateUserDto,
-  ): Promise<Omit<User, 'passwordHash'>> {
+  ): Promise<SafeUser> {
     this.assertCanCreateUser(actorRole, dto.role);
     const existing = await this.findByPhoneNumber(dto.phoneNumber);
     if (existing) {
@@ -272,7 +307,7 @@ export class UsersService {
   async updateProfile(
     userId: string,
     updateProfileDto: UpdateProfileDto,
-  ): Promise<Omit<User, 'passwordHash'>> {
+  ): Promise<SafeUser> {
     const user = await this.findById(userId);
     if (!user) {
       throw new NotFoundException('Không tìm thấy người dùng!');
@@ -353,7 +388,7 @@ export class UsersService {
     actorRole: Role,
     userId: string,
     adminUpdateUserDto: AdminUpdateUserDto,
-  ): Promise<Omit<User, 'passwordHash'>> {
+  ): Promise<SafeUser> {
     const user = await this.findById(userId);
     if (!user) {
       throw new NotFoundException('Không tìm thấy người dùng!');

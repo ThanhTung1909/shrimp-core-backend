@@ -54,6 +54,10 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
         const { passwordHash, ...safe } = u;
         return safe;
       }),
+      sanitizeAuthenticatedUser: vi.fn((u) => {
+        const { passwordHash: _passwordHash, ...safe } = u;
+        return safe;
+      }),
     };
 
     userSessionRepository = {
@@ -732,6 +736,19 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
         Role.MANAGER,
       );
       expect(result).toHaveProperty('userId', 'any-id');
+    });
+
+    it('ADMIN viewing another user profile -> allowed', async () => {
+      usersService.findById.mockResolvedValue({
+        userId: 'victim-id',
+        fullName: 'Victim',
+      });
+      const result = await usersController.getUserById(
+        'victim-id',
+        'admin-id',
+        Role.ADMIN,
+      );
+      expect(result).toBeDefined();
     });
   });
 

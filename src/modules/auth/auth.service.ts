@@ -58,6 +58,11 @@ export class AuthService {
     otp?: string;
     expiresIn: string;
   }> {
+    const genericResponse = {
+      message: 'Nếu số điện thoại hợp lệ, mã OTP đã được gửi',
+      phoneNumber: sendOtpDto.phoneNumber,
+      expiresIn: '5 phút',
+    };
     const existingUser = await this.userService.findByPhoneNumber(
       sendOtpDto.phoneNumber,
     );
@@ -67,29 +72,18 @@ export class AuthService {
       );
     }
 
-      if (sendOtpDto.purpose === OtpPurpose.LOGIN && !existingUser) {
-      throw new UnauthorizedException('Tài khoản không tồn tại trong hệ thống!');
-    }
-    if (sendOtpDto.purpose === OtpPurpose.LOGIN && existingUser && existingUser.isLoginLocked) {
-      throw new UnauthorizedException('Vui lòng liên hệ quản lý');
-    }
+    const requiresExistingAccount =
+      sendOtpDto.purpose === OtpPurpose.LOGIN ||
+      sendOtpDto.purpose === OtpPurpose.CHANGE_PASSWORD ||
+      sendOtpDto.purpose === OtpPurpose.RESET_PASSWORD;
 
     if (
-      sendOtpDto.purpose === OtpPurpose.RESET_PASSWORD &&
-      !existingUser
+      requiresExistingAccount &&
+      (!existingUser ||
+        (sendOtpDto.purpose === OtpPurpose.LOGIN &&
+          existingUser.isLoginLocked))
     ) {
-      return {
-        message: 'Nếu số điện thoại hợp lệ, mã OTP đã được gửi',
-        phoneNumber: sendOtpDto.phoneNumber,
-        expiresIn: '5 phút',
-      };
-    }
-
-    if (
-      sendOtpDto.purpose === OtpPurpose.CHANGE_PASSWORD &&
-      !existingUser
-    ) {
-        throw new UnauthorizedException('Tài khoản không tồn tại trong hệ thống!');;
+      return genericResponse;
     }
 
       let otp: string | undefined;
@@ -111,11 +105,15 @@ export class AuthService {
         otp = '123456';
       }
 
-      return {
-        message: 'Mã OTP đã được gửi thành công!',
-        phoneNumber: sendOtpDto.phoneNumber,
-        ...(process.env.NODE_ENV === 'production' ? {} : { otp }),
-        expiresIn: '5 phút',
+    if (requiresExistingAccount) {
+      return genericResponse;
+    }
+
+    return {
+      message: 'Mã OTP đã được gửi thành công!',
+      phoneNumber: sendOtpDto.phoneNumber,
+      ...(process.env.NODE_ENV === 'production' ? {} : { otp }),
+      expiresIn: '5 phút',
     };
   }
 
@@ -130,7 +128,12 @@ export class AuthService {
     otp?: string;
     expiresIn: string;
   }> {
-    return this.sendOtp({ phoneNumber, purpose: OtpPurpose.RESET_PASSWORD });
+    await this.sendOtp({ phoneNumber, purpose: OtpPurpose.RESET_PASSWORD });
+    return {
+      message: 'Nếu số điện thoại hợp lệ, mã OTP đã được gửi',
+      phoneNumber,
+      expiresIn: '5 phút',
+    };
   }
 
 
@@ -663,14 +666,6 @@ export class AuthService {
 
   // Hàm đặt lại mật khẩu bằng OTP (Phase 7 - Change Password & Revoke All Sessions)
   async resetPassword(resetPasswordDto: ResetPasswordDto) {
-    const user = await this.userService.findByPhoneNumber(
-      resetPasswordDto.phoneNumber,
-    );
-
-    if (!user || !user.isActive) {
-      throw new UnauthorizedException('Không tìm thấy người dùng!');
-    }
-
     let isValid = false;
     if (this.otpService) {
       isValid = await this.otpService.consumePhoneVerified(
@@ -683,7 +678,17 @@ export class AuthService {
 
     if (!isValid) {
       throw new UnauthorizedException(
-        'Chưa xác thực OTP hoặc phiên xác thực đã hết hạn!',
+        'Yêu cầu đặt lại mật khẩu không hợp lệ hoặc đã hết hạn!',
+      );
+    }
+
+    const user = await this.userService.findByPhoneNumber(
+      resetPasswordDto.phoneNumber,
+    );
+
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException(
+        'Yêu cầu đặt lại mật khẩu không hợp lệ hoặc đã hết hạn!',
       );
     }
 

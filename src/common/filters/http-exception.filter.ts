@@ -17,6 +17,7 @@ export interface ErrorResponseBody {
   timestamp: string;
   path: string;
   errors?: string[] | null;
+  retryAfterSeconds?: number;
 }
 
 const VIETNAMESE_HTTP_MESSAGES: Record<number, string> = {
@@ -54,6 +55,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let message = 'Lỗi hệ thống nội bộ, vui lòng thử lại sau!';
     let errorCode = 'INTERNAL_SERVER_ERROR';
     let errors: string[] | null = null;
+    let retryAfterSeconds: number | undefined;
 
     if (exception instanceof HttpException) {
       statusCode = exception.getStatus();
@@ -75,10 +77,16 @@ export class AllExceptionsFilter implements ExceptionFilter {
           errorCode = 'VALIDATION_ERROR';
         } else {
           message = resObj.message || exception.message;
-          errorCode =
-            resObj.error
-              ? String(resObj.error).toUpperCase().replace(/\s+/g, '_')
-              : HttpStatus[statusCode] || 'HTTP_ERROR';
+          const responseCode = resObj.errorCode ?? resObj.code ?? resObj.error;
+          errorCode = responseCode
+            ? String(responseCode).toUpperCase().replace(/\s+/g, '_')
+            : HttpStatus[statusCode] || 'HTTP_ERROR';
+          if (
+            typeof resObj.retryAfterSeconds === 'number' &&
+            Number.isFinite(resObj.retryAfterSeconds)
+          ) {
+            retryAfterSeconds = resObj.retryAfterSeconds;
+          }
         }
       }
 
@@ -144,6 +152,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       timestamp: new Date().toISOString(),
       path: request.url || request.originalUrl,
       ...(errors && errors.length > 0 ? { errors } : {}),
+      ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
     };
 
     response.status(statusCode).json(responseBody);

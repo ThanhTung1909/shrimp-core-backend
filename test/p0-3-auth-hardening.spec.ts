@@ -119,6 +119,10 @@ describe('P0-3 AUTH HARDENING TEST SUITE: Password Reset & Access Token Blacklis
         const { passwordHash: _passwordHash, ...rest } = user;
         return rest;
       }),
+      sanitizeAuthenticatedUser: vi.fn((user: any) => {
+        const { passwordHash: _passwordHash, ...rest } = user;
+        return rest;
+      }),
     };
 
     userSessionRepository = {
@@ -272,16 +276,17 @@ describe('P0-3 AUTH HARDENING TEST SUITE: Password Reset & Access Token Blacklis
       usersStore.set(phone, mockUser);
 
       const res = await authController.forgotPassword({ phoneNumber: phone });
-      expect(res.message).toBe('Mã OTP đã được gửi thành công!');
+      expect(res.message).toBe('Nếu số điện thoại hợp lệ, mã OTP đã được gửi');
       expect(res.phoneNumber).toBe(phone);
       expect(res.expiresIn).toBe('5 phút');
-      expect(res.otp).toBeDefined();
+      expect(res.otp).toBeUndefined();
 
       // EsmsService was called
-      expect(esmsService.sendSMS).toHaveBeenCalledWith(phone, res.otp);
+      expect(esmsService.sendSMS).toHaveBeenCalledWith(phone, expect.any(String));
 
       // Verify OTP was stored in Redis with RESET_PASSWORD purpose
-      const isVerified = await otpService.verifyOtp(OtpPurpose.RESET_PASSWORD, phone, res.otp!);
+      const sentOtp = esmsService.sendSMS.mock.calls[0][1];
+      const isVerified = await otpService.verifyOtp(OtpPurpose.RESET_PASSWORD, phone, sentOtp);
       expect(isVerified).toBe(true);
     });
 
@@ -296,6 +301,17 @@ describe('P0-3 AUTH HARDENING TEST SUITE: Password Reset & Access Token Blacklis
       expect(res.expiresIn).toBe('5 phút');
       // SMS should NOT be sent for unknown phone
       expect(esmsService.sendSMS).not.toHaveBeenCalled();
+
+      const knownPhone = getNextPhone();
+      usersStore.set(knownPhone, {
+        userId: 'user-forgot-shape',
+        phoneNumber: knownPhone,
+        isActive: true,
+      });
+      const knownRes = await authController.forgotPassword({ phoneNumber: knownPhone });
+      expect(knownRes.message).toBe(res.message);
+      expect(knownRes.expiresIn).toBe(res.expiresIn);
+      expect(Object.keys(knownRes).sort()).toEqual(Object.keys(res).sort());
     });
 
     it('Requirement 3: Uses RESET_PASSWORD purpose and existing OTP TTL infrastructure', async () => {
@@ -310,16 +326,16 @@ describe('P0-3 AUTH HARDENING TEST SUITE: Password Reset & Access Token Blacklis
         fullName: 'Forgot User 3',
       });
 
-      const res = await authController.forgotPassword({ phoneNumber: phone });
-      expect(res.otp).toBeDefined();
+      await authController.forgotPassword({ phoneNumber: phone });
+      const sentOtp = esmsService.sendSMS.mock.calls[0][1];
 
       // Attempting to verify with REGISTER purpose should FAIL (purpose isolation)
       await expect(
-        otpService.verifyOtp(OtpPurpose.REGISTER, phone, res.otp!),
+        otpService.verifyOtp(OtpPurpose.REGISTER, phone, sentOtp),
       ).rejects.toThrow();
 
       // Verifying with RESET_PASSWORD succeeds
-      const verifySuccess = await otpService.verifyOtp(OtpPurpose.RESET_PASSWORD, phone, res.otp!);
+      const verifySuccess = await otpService.verifyOtp(OtpPurpose.RESET_PASSWORD, phone, sentOtp);
       expect(verifySuccess).toBe(true);
     });
   });

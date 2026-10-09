@@ -571,6 +571,25 @@ describe('API AUTHORIZATION & SECURITY AUDIT (PHASE 9)', () => {
       expect((safe as any).passwordHash).toBeUndefined();
     });
 
+    it('sanitizeUser allowlists public fields and strips internal authentication data', () => {
+      const rawUser = {
+        ...usersStore.get(FARMER_A),
+        fcmToken: 'internal-fcm-token',
+        tokenVersion: 7,
+        isLoginLocked: true,
+        sessions: [{ refreshTokenHash: 'internal-hash' }],
+      };
+
+      const safe = usersService.sanitizeUser(rawUser);
+
+      expect(safe.userId).toBe(FARMER_A);
+      expect(safe).not.toHaveProperty('passwordHash');
+      expect(safe).not.toHaveProperty('fcmToken');
+      expect(safe).not.toHaveProperty('tokenVersion');
+      expect(safe).not.toHaveProperty('isLoginLocked');
+      expect(safe).not.toHaveProperty('sessions');
+    });
+
     it('Farmer viewing own profile via getUserById returns sanitized user without passwordHash', async () => {
       const profile = await usersController.getUserById(FARMER_A, FARMER_A, Role.FARMER);
       expect(profile).toBeDefined();
