@@ -9,6 +9,7 @@ import {
   Optional,
   Post,
   Req,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
@@ -25,6 +26,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto.js';
 import { SendOtpDto } from './dto/send-otp.dto.js';
 import { VerifyOtpDto } from './dto/verify-otp.dto.js';
 import { LogoutDto } from './dto/logout.dto.js';
+import { ForgotPasswordDto } from './dto/forgot-password.dto.js';
 
 import { UsersService } from '../users/users.service.js';
 import { User } from '../users/entities/user.entity.js';
@@ -45,6 +47,7 @@ import {
 import { Public } from '../../common/decorators/public.decorator.js';
 
 import { Gender } from '../../common/enums/gender.enum.js';
+import { JwtService } from '@nestjs/jwt';
 
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 
@@ -60,6 +63,8 @@ export class AuthController {
     private readonly usersService: UsersService,
     @Optional()
     private readonly rateLimitService?: RateLimitService,
+    @Optional()
+    private readonly jwtService?: JwtService,
   ) {}
 
   private async applyRateLimit(
@@ -88,6 +93,45 @@ export class AuthController {
     }
   }
 
+  /**
+   * Extract jti and exp from the Bearer access token in the Authorization header.
+   * Throws UnauthorizedException if the header is missing, malformed, or missing jti/exp.
+   * Does NOT verify the signature here — passport-jwt already verified it before
+   * this controller handler runs.
+   */
+  private extractAccessTokenClaims(
+    authHeader: string | undefined,
+  ): { jti: string; exp: number } {
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      throw new UnauthorizedException('Thiếu hoặc sai định dạng Authorization header!');
+    }
+    const token = authHeader.slice(7);
+    try {
+      const payload = this.jwtService
+        ? (this.jwtService.decode(token) as any)
+        : (JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()) as any);
+
+      if (
+        !payload?.jti ||
+        typeof payload.jti !== 'string' ||
+        !payload?.exp ||
+        !Number.isFinite(payload.exp)
+      ) {
+        throw new UnauthorizedException('Access token không hợp lệ!');
+      }
+
+      return {
+        jti: payload.jti,
+        exp: payload.exp,
+      };
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      throw new UnauthorizedException('Access token không hợp lệ!');
+    }
+  }
+
   @Public()
   @Post('send-otp')
   @ApiOperation({ summary: 'Gửi mã xác thực OTP qua SMS/Email' })
@@ -113,6 +157,36 @@ export class AuthController {
       RATE_LIMIT_CONFIG.OTP_SEND.IP_WINDOW,
     );
     return this.authService.sendOtp(sendOtpDto);
+  }
+
+  /**
+   * POST /auth/forgot-password
+   * Public endpoint. Triggers a RESET_PASSWORD OTP for the given phoneNumber.
+   * Anti-enumeration: always returns 200 with a consistent message.
+   * Reuses the existing OTP/SMS infrastructure via sendOtp internally.
+   */
+  @Public()
+  @Post('forgot-password')
+  async forgotPassword(
+    @Body() dto: ForgotPasswordDto,
+    @Ip() ip?: string,
+  ): Promise<{
+    message: string;
+    phoneNumber: string;
+    otp?: string;
+    expiresIn: string;
+  }> {
+    await this.applyRateLimit(
+      getOtpSendPhoneKey(dto.phoneNumber),
+      RATE_LIMIT_CONFIG.OTP_SEND.PHONE_LIMIT,
+      RATE_LIMIT_CONFIG.OTP_SEND.PHONE_WINDOW,
+    );
+    await this.applyRateLimit(
+      getOtpSendIpKey(ip),
+      RATE_LIMIT_CONFIG.OTP_SEND.IP_LIMIT,
+      RATE_LIMIT_CONFIG.OTP_SEND.IP_WINDOW,
+    );
+    return this.authService.forgotPassword(dto.phoneNumber);
   }
 
   @Public()
@@ -288,8 +362,16 @@ export class AuthController {
   async logout(
     @CurrentUser('userId') userId: string,
     @Body() logoutDto: LogoutDto,
+    @Headers('authorization') authHeader?: string,
   ): Promise<{ message: string }> {
-    return this.authService.logout(userId, logoutDto.refreshToken);
+    let jti: string | undefined;
+    let exp: number | undefined;
+    if (authHeader) {
+      const claims = this.extractAccessTokenClaims(authHeader);
+      jti = claims.jti;
+      exp = claims.exp;
+    }
+    return this.authService.logout(userId, logoutDto.refreshToken, jti, exp);
   }
 
   @Post('logout-all')
