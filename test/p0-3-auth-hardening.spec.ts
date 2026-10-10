@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { ConfigService } from '@nestjs/config';
-import { UnauthorizedException } from '@nestjs/common';
+import { NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { AuthService } from '../src/modules/auth/auth.service.js';
 import { AuthController } from '../src/modules/auth/auth.controller.js';
@@ -13,6 +13,7 @@ import { getAccessTokenBlacklistKey } from '../src/common/redis/rate-limit.const
 import { Role } from '../src/common/enums/role.enum.js';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
+import { authLockoutFixture } from './helpers/auth-lockout-fixture.js';
 
 describe('P0-3 AUTH HARDENING TEST SUITE: Password Reset & Access Token Blacklist', () => {
   let configService: ConfigService;
@@ -43,7 +44,9 @@ describe('P0-3 AUTH HARDENING TEST SUITE: Password Reset & Access Token Blacklis
     configService = new ConfigService({
       REDIS_HOST: process.env.REDIS_HOST || 'localhost',
       REDIS_PORT: process.env.REDIS_PORT || 6379,
-      REDIS_DB: 0,
+      // This security suite clears its own Redis keys before each test, so it
+      // needs a dedicated logical DB when Vitest runs files in parallel.
+      REDIS_DB: 14,
       JWT_ACCESS_SECRET: accessSecret,
       JWT_REFRESH_SECRET: refreshSecret,
       JWT_ACCESS_EXPIRES_IN: '15m',
@@ -58,6 +61,14 @@ describe('P0-3 AUTH HARDENING TEST SUITE: Password Reset & Access Token Blacklis
       secret: accessSecret,
       signOptions: { expiresIn: '15m' },
     });
+    const originalQuit = redisService.getClient().quit.bind(redisService.getClient());
+    redisService.getClient().quit = async () => {
+      return originalQuit();
+    };
+    const originalDisconnect = redisService.getClient().disconnect.bind(redisService.getClient());
+    redisService.getClient().disconnect = (...args) => {
+      return originalDisconnect(...args);
+    };
   });
 
   afterAll(async () => {
@@ -70,13 +81,15 @@ describe('P0-3 AUTH HARDENING TEST SUITE: Password Reset & Access Token Blacklis
         await redisService.del(...allKeys);
       }
     }
-    await redisService.onModuleDestroy();
+    // await redisService.onModuleDestroy();
   });
 
   beforeEach(async () => {
     usersStore = new Map();
     sessionsStore = [];
 
+    // Recreate Redis client to ensure it's fresh for every test
+    await redisService.onModuleInit();
     const client = redisService.getClient();
     if (client && client.status === 'ready') {
       const rlKeys = await client.keys('rl:*');
@@ -242,6 +255,7 @@ describe('P0-3 AUTH HARDENING TEST SUITE: Password Reset & Access Token Blacklis
       esmsService,
       otpService,
       redisService,
+      authLockoutFixture(usersService, dataSource) as any,
     );
 
     authController = new AuthController(
@@ -284,17 +298,14 @@ describe('P0-3 AUTH HARDENING TEST SUITE: Password Reset & Access Token Blacklis
       expect(isVerified).toBe(true);
     });
 
-    it('Requirement 2: Anti-enumeration: unknown account returns identical success response shape without throwing', async () => {
+    it('Requirement 2: unknown account returns 404 without issuing an OTP', async () => {
       const unknownPhone = getNextPhone();
       // Account does NOT exist in usersStore
       expect(usersStore.get(unknownPhone)).toBeUndefined();
 
-      const res = await authController.forgotPassword({ phoneNumber: unknownPhone });
-      expect(res).toBeDefined();
-      expect(res.message).toBe('Nếu số điện thoại hợp lệ, mã OTP đã được gửi');
-      expect(res.phoneNumber).toBe(unknownPhone);
-      expect(res.expiresIn).toBe('5 phút');
-      expect(res.otp).toBeUndefined();
+      await expect(
+        authController.forgotPassword({ phoneNumber: unknownPhone }),
+      ).rejects.toBeInstanceOf(NotFoundException);
       // SMS should NOT be sent for unknown phone
       expect(esmsService.sendSMS).not.toHaveBeenCalled();
     });

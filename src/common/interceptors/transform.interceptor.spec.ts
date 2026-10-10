@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ExecutionContext, CallHandler } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -15,7 +16,7 @@ describe('TransformInterceptor', () => {
   let mockResponse: any;
 
   beforeEach(() => {
-    reflector = new Reflector();
+    reflector = { getAllAndOverride: vi.fn(), get: vi.fn() } as unknown as Reflector;
     interceptor = new TransformInterceptor(reflector);
 
     mockRequest = { method: 'GET' };

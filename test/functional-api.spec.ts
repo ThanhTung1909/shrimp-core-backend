@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -18,15 +19,18 @@ import { PondsController } from '../src/modules/ponds/ponds.controller.js';
 import { DevicesService } from '../src/modules/devices/devices.service.js';
 import { DevicesController } from '../src/modules/devices/devices.controller.js';
 import { Role } from '../src/common/enums/role.enum.js';
+import { OtpPurpose } from '../src/common/redis/otp.constants.js';
 import { DeviceStatus } from '../src/common/enums/device-status.enum.js';
 import { JwtService } from '@nestjs/jwt';
-import { UserSession } from '../src/modules/auth/entities/user-session.entity.js';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
 
 describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
   let redisService: RedisService;
+  let loginLockoutService: any;
   let rateLimitService: RateLimitService;
+  let emailService: any;
+  let esmsService: any;
   let otpService: OtpService;
   let jwtService: JwtService;
   let configService: ConfigService;
@@ -59,7 +63,9 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       REDIS_HOST: process.env.REDIS_HOST || 'localhost',
       REDIS_PORT: process.env.REDIS_PORT || 6379,
       REDIS_PASSWORD: process.env.REDIS_PASSWORD || undefined,
-      REDIS_DB: 0,
+      // Keep functional OTP/session keys isolated from concurrently executed
+      // suites on the dedicated Redis test instance.
+      REDIS_DB: 15,
       JWT_ACCESS_SECRET: 'test_functional_jwt_access_secret_123456789012',
       JWT_REFRESH_SECRET: 'test_functional_jwt_refresh_secret_987654321098',
       JWT_ACCESS_EXPIRES_IN: '15m',
@@ -105,6 +111,78 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
     manualLogsStore = [];
     devicesStore = [];
 
+    emailService = { sendInitialPassword: vi.fn(), sendPasswordResetOtp: vi.fn() };
+    esmsService = { sendSMS: vi.fn() };
+    loginLockoutService = {
+      assertNotLocked: vi.fn((user, _state) => { if (!user || user.isActive === false || user.isLocked) throw new UnauthorizedException(); }),
+
+      resetLoginFailureState: vi.fn(), resetAttempts: vi.fn(), recordFailure: vi.fn().mockResolvedValue({ pendingManual: false, attempts: 0, tempTtl: 0 }), recordFailedAttempt: vi.fn(),
+      getState: vi.fn().mockResolvedValue({ pendingManual: false, attempts: 0, tempTtl: 0 }),
+      withUserLock: vi.fn(async (userId, operation) => {
+        let globalLock = (global as any).__mockGlobalLock;
+        if (!globalLock) {
+          globalLock = (global as any).__mockGlobalLock = { __txLock: Promise.resolve() };
+        }
+        if (!globalLock.__txLock) globalLock.__txLock = Promise.resolve();
+        const currentLock = globalLock.__txLock;
+        let releaseLock;
+        globalLock.__txLock = new Promise((resolve) => { releaseLock = resolve; });
+        await currentLock;
+        try {
+          const user = usersStore.get(userId);
+          const manager = {
+            update: vi.fn(async (_entity, criteria, updateData) => {
+              let affected = 0;
+              for (const session of sessionsStore) {
+                const activeOnly = criteria.revokedAt?._type === 'isNull';
+                if (
+                  (!criteria.userId || session.userId === criteria.userId) &&
+                  (!criteria.tokenFamily || session.tokenFamily === criteria.tokenFamily) &&
+                  (!activeOnly || session.revokedAt === null)
+                ) {
+                  Object.assign(session, updateData);
+                  affected++;
+                }
+              }
+              return { affected };
+            }),
+            save: vi.fn(async (arg1, arg2) => { const record = arg2 || arg1; if (record && typeof record.tokenFamily === "string") { sessionsStore.push(record); } else { usersStore.set(record.userId, record); } return record; }),
+            create: vi.fn((entity, data) => ({ id: "sess-" + Math.random(), createdAt: new Date(), lastUsedAt: new Date(), revokedAt: null, revokeReason: null, ...data })),
+            getRepository: vi.fn(() => ({
+            findOne: vi.fn(async (opt) => {
+              if (opt.where?.userId) return usersStore.get(opt.where.userId) || null;
+              return null;
+            }),
+            update: vi.fn(async (criteria, data) => {
+              const user = usersStore.get(criteria.userId || criteria);
+              if (user) Object.assign(user, data);
+              return { affected: user ? 1 : 0 };
+            }),
+            delete: vi.fn(async (criteria) => {
+              const userId = criteria.userId || criteria;
+              const user = usersStore.get(userId);
+              if (!user || (criteria.role?._value && user.role === criteria.role._value)) {
+                return { affected: 0 };
+              }
+              usersStore.delete(userId);
+              return { affected: 1 };
+            }),
+            increment: vi.fn(async (criteria) => {
+                const u = usersStore.get(criteria.userId);
+                if (u) u.tokenVersion = (u.tokenVersion || 0) + 1;
+                return { affected: u ? 1 : 0 };
+              }),
+            })),
+            findOne: vi.fn(async (entity, options) => usersStore.get(options.where.userId)),
+          };
+          const afterCommit = (cb) => cb();
+          return await operation(user, manager, afterCommit);
+        } finally {
+          releaseLock();
+        }
+      }),
+    };
+
     const usersRepo: any = {
       create: vi.fn((dto) => ({
         userId: 'u-' + Math.random(),
@@ -118,11 +196,36 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
         usersStore.set(u.userId, u);
         return u;
       }),
+      createQueryBuilder: vi.fn(() => {
+        const mockQb: any = {
+          addSelect: vi.fn(() => mockQb),
+          where: vi.fn((clause: any, params: any) => { mockQb.__params = params; return mockQb; }),
+          getOne: vi.fn(async () => {
+            const params = mockQb.__params;
+            if (params && params.phoneNumber) {
+              const user = Array.from(usersStore.values()).find(u => u.phoneNumber === params.phoneNumber);
+              return user || null;
+            }
+            if (params && params.email) {
+              const user = Array.from(usersStore.values()).find(u => u.email === params.email);
+              return user || null;
+            }
+            if (params && params.userId) return usersStore.get(params.userId) || null;
+            return null;
+          })
+        };
+        return mockQb;
+      }),
       findOne: vi.fn(async (opt) => {
         if (opt.where?.userId) return usersStore.get(opt.where.userId) || null;
         if (opt.where?.phoneNumber) {
           for (const u of usersStore.values()) {
             if (u.phoneNumber === opt.where.phoneNumber) return u;
+          }
+        }
+        if (opt.where?.email) {
+          for (const u of usersStore.values()) {
+            if (u.email === opt.where.email) return u;
           }
         }
         return null;
@@ -132,9 +235,18 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
         return [list, list.length];
       }),
       update: vi.fn(async (criteria, updateData) => {
-        const u = usersStore.get(criteria.userId);
-        if (u) Object.assign(u, updateData);
-        return { affected: u ? 1 : 0 };
+        const user = usersStore.get(criteria.userId || criteria);
+        if (user) Object.assign(user, updateData);
+        return { affected: user ? 1 : 0 };
+      }),
+      delete: vi.fn(async (criteria) => {
+        const userId = criteria.userId || criteria;
+        const user = usersStore.get(userId);
+        if (!user || (criteria.role?._value && user.role === criteria.role._value)) {
+          return { affected: 0 };
+        }
+        usersStore.delete(userId);
+        return { affected: 1 };
       }),
       increment: vi.fn(async (criteria) => {
         const u = usersStore.get(criteria.userId);
@@ -147,8 +259,7 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       }),
     };
 
-    usersService = new UsersService(usersRepo);
-    usersController = new UsersController(usersService);
+
 
     const userSessionRepo: any = {
       create: vi.fn((data: any) => ({
@@ -172,13 +283,24 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
         const hash = options?.where?.refreshTokenHash;
         return sessionsStore.find((s) => s.refreshTokenHash === hash) || null;
       }),
+      update: vi.fn(async (criteria: any, updateData: any) => {
+        let affected = 0;
+        for (const session of sessionsStore) {
+          const activeOnly = criteria.revokedAt?._type === 'isNull';
+          if (session.tokenFamily === criteria.tokenFamily && (!activeOnly || session.revokedAt === null)) {
+            Object.assign(session, updateData);
+            affected++;
+          }
+        }
+        return { affected };
+      }),
     };
 
     const dataSource: any = {
       transaction: vi.fn(async (callback: any) => {
         const manager = {
           create: vi.fn((entity: any, data: any) => {
-            if (entity === UserSession) {
+            if (data && typeof data.tokenFamily === 'string') {
               return {
                 id: 'sess-' + Math.random(),
                 createdAt: new Date(),
@@ -197,7 +319,7 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
             };
           }),
           save: vi.fn(async (entity: any, record: any) => {
-            if (entity === UserSession) {
+            if (record && typeof record.tokenFamily === 'string') {
               const index = sessionsStore.findIndex((s) => s.id === record.id);
               if (index >= 0) sessionsStore[index] = { ...sessionsStore[index], ...record };
               else sessionsStore.push(record);
@@ -231,13 +353,20 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       }),
     };
 
+
+    usersService = new UsersService(usersRepo, loginLockoutService);
+    usersController = new UsersController(usersService);
     authService = new AuthService(
       usersService,
       jwtService,
       configService,
       userSessionRepo,
       dataSource,
+      emailService,
+      esmsService,
       otpService,
+      redisService,
+      loginLockoutService,
     );
     authController = new AuthController(authService, usersService, rateLimitService);
 
@@ -326,13 +455,36 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
     devicesService = new DevicesService(deviceRepo, pondRepo);
     devicesController = new DevicesController(devicesService);
   });
+
+  async function registerAndLogin(
+    fullName: string,
+    deviceName = 'Functional Test Device',
+  ) {
+    const phoneNumber = getNextPhone();
+    const email = `functional-${phoneNumber}@example.invalid`;
+    await otpService.setPhoneVerified(OtpPurpose.REGISTER, phoneNumber);
+    const registration = await authController.register(
+      { fullName, phoneNumber, email, role: Role.FARMER },
+      getNextIp(),
+      deviceName,
+    );
+    const issuedPassword = emailService.sendInitialPassword.mock.calls[0]?.[3];
+    expect(typeof issuedPassword).toBe('string');
+    const login = await authController.login(
+      { phoneNumber, password: issuedPassword },
+      getNextIp(),
+      deviceName,
+    );
+    return { phoneNumber, email, issuedPassword, registration, login };
+  }
+
   // ==========================================
   // 1. AUTHENTICATION FUNCTIONAL FLOW
   // ==========================================
   describe('1. Authentication Functional APIs', () => {
     it('POST /auth/send-otp -> Valid phone sends OTP and returns 2xx message', async () => {
       const phone = getNextPhone();
-      const res = await authController.sendOtp({ phoneNumber: phone });
+      const res = await authController.sendOtp({ phoneNumber: phone, purpose: OtpPurpose.REGISTER });
 
       expect(res.message).toBeDefined();
       expect(res.phoneNumber).toBe(phone);
@@ -343,70 +495,69 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       const phone = getNextPhone();
       usersStore.set('existing-user', { userId: 'existing-user', phoneNumber: phone, isActive: true });
 
-      await expect(authController.sendOtp({ phoneNumber: phone })).rejects.toThrow(ConflictException);
+      await expect(authController.sendOtp({ phoneNumber: phone, purpose: OtpPurpose.REGISTER })).rejects.toThrow(ConflictException);
     });
 
     it('POST /auth/verify-otp -> Correct OTP verifies phone successfully', async () => {
       const phone = getNextPhone();
-      const { otp } = await otpService.createAndSaveOtp(phone);
+      const { otp } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
-      const res = await authController.verifyOtp({ phoneNumber: phone, otp });
+      const res = await authController.verifyOtp({ phoneNumber: phone, otp, purpose: OtpPurpose.REGISTER });
       expect(res.message).toBeDefined();
       expect(res.isValid).toBe(true);
 
       // Verify OTP marker exists in Redis
-      expect(await otpService.isPhoneVerified(phone)).toBe(true);
+      expect(await otpService.isPhoneVerified(OtpPurpose.REGISTER, phone)).toBe(true);
     });
 
     it('POST /auth/verify-otp -> Wrong OTP throws 400 BadRequest', async () => {
       const phone = getNextPhone();
-      await otpService.createAndSaveOtp(phone);
+      await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
       await expect(authController.verifyOtp({ phoneNumber: phone, otp: '000000' })).rejects.toThrow(
         BadRequestException,
       );
     });
 
-    it('POST /auth/register -> Valid registration creates User and UserSession', async () => {
+    it('POST /auth/register -> Valid registration creates a user and sends the initial password', async () => {
       const phone = getNextPhone();
-      await otpService.setPhoneVerified(phone);
+      const email = `register-${phone}@example.invalid`;
+      await otpService.setPhoneVerified(OtpPurpose.REGISTER, phone);
 
       const res = await authController.register(
-        {
-          fullName: 'Nguyen Van A',
-          phoneNumber: phone,
-          password: 'Password123!',
-        },
+        { fullName: 'Nguyen Van A', phoneNumber: phone, email, role: Role.FARMER },
         '127.0.0.1',
         'Mozilla/5.0 (Windows NT 10.0)',
       );
 
-      expect(res.message).toBeDefined();
-      expect(res.userId).toBeDefined();
-      expect(res.accessToken).toBeDefined();
-      expect(res.refreshToken).toBeDefined();
+      expect(res).toEqual({
+        message: 'Đăng ký tài khoản thành công. Mật khẩu đã được gửi về email.',
+        userId: expect.any(String),
+        fullName: 'Nguyen Van A',
+        phoneNumber: phone,
+        email,
+        role: Role.FARMER,
+      });
+      expect(res).not.toHaveProperty('accessToken');
+      expect(res).not.toHaveProperty('refreshToken');
+      expect(emailService.sendInitialPassword).toHaveBeenCalledWith(
+        email,
+        'Nguyen Van A',
+        phone,
+        expect.any(String),
+      );
 
       const user = usersStore.get(res.userId);
       expect(user).toBeDefined();
       expect(user.fullName).toBe('Nguyen Van A');
       expect(user.role).toBe(Role.FARMER);
-
-      const session = sessionsStore.find((s) => s.userId === res.userId);
-      expect(session).toBeDefined();
-      expect(session.deviceName).toBe('Mozilla/5.0 (Windows NT 10.0)');
-      expect(session.revokedAt).toBeNull();
+      expect(user.mustChangePassword).toBe(true);
+      expect(user.passwordHash).not.toBe(emailService.sendInitialPassword.mock.calls[0][3]);
+      await expect(bcrypt.compare(emailService.sendInitialPassword.mock.calls[0][3], user.passwordHash)).resolves.toBe(true);
+      expect(sessionsStore).toHaveLength(0);
     });
 
-    it('POST /auth/register -> Missing OTP verification throws 400 BadRequest', async () => {
-      const phone = getNextPhone();
-      await expect(
-        authController.register({
-          fullName: 'No OTP',
-          phoneNumber: phone,
-          password: 'Password123!',
-        }),
-      ).rejects.toThrow(BadRequestException);
-    });
+
 
     it('POST /auth/login -> Valid credentials returns tokens and creates session', async () => {
       const phone = getNextPhone();
@@ -430,12 +581,15 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       );
 
       expect(res.userId).toBe(user.userId);
-      expect(res.accessToken).toBeDefined();
-      expect(res.refreshToken).toBeDefined();
+      expect(res.accessToken).toEqual(expect.any(String));
+      expect(res.refreshToken).toEqual(expect.any(String));
 
       const session = sessionsStore.find((s) => s.userId === user.userId);
       expect(session).toBeDefined();
       expect(session.deviceName).toBe('Safari on iPhone');
+      expect(session.refreshTokenHash).toBe(crypto.createHash('sha256').update(res.refreshToken).digest('hex'));
+      expect(session.tokenFamily).toEqual(expect.any(String));
+      expect(session.revokedAt).toBeNull();
     });
 
     it('POST /auth/login -> Wrong password throws 401 Unauthorized', async () => {
@@ -461,24 +615,16 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
     });
 
     it('POST /auth/refresh -> Valid token rotates session and returns new tokens', async () => {
-      const phone = getNextPhone();
-      await otpService.setPhoneVerified(phone);
-      const reg = await authController.register(
-        {
-          fullName: 'Refresh Tester',
-          phoneNumber: phone,
-          password: 'Password123!',
-        },
-        getNextIp(),
-      );
+      const { registration, login } = await registerAndLogin('Refresh Tester');
 
-      const initialSession = sessionsStore.find((s) => s.userId === reg.userId);
+      const initialSession = sessionsStore.find((s) => s.userId === registration.userId);
+      expect(initialSession).toBeDefined();
       const initialFamily = initialSession.tokenFamily;
 
-      const refreshRes = await authController.refreshToken({ refreshToken: reg.refreshToken }, getNextIp());
+      const refreshRes = await authController.refreshToken({ refreshToken: login.refreshToken }, getNextIp());
       expect(refreshRes.accessToken).toBeDefined();
       expect(refreshRes.refreshToken).toBeDefined();
-      expect(refreshRes.refreshToken).not.toBe(reg.refreshToken);
+      expect(refreshRes.refreshToken).not.toBe(login.refreshToken);
 
       expect(initialSession.revokedAt).not.toBeNull();
       expect(initialSession.revokeReason).toBe('ROTATED');
@@ -490,20 +636,11 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
     });
 
     it('POST /auth/refresh -> Reuse rotated token throws 401 and revokes family', async () => {
-      const phone = getNextPhone();
-      await otpService.setPhoneVerified(phone);
-      const reg = await authController.register(
-        {
-          fullName: 'Reuse Tester',
-          phoneNumber: phone,
-          password: 'Password123!',
-        },
-        getNextIp(),
-      );
+      const { login } = await registerAndLogin('Reuse Tester');
 
-      const rot = await authController.refreshToken({ refreshToken: reg.refreshToken }, getNextIp());
+      const rot = await authController.refreshToken({ refreshToken: login.refreshToken }, getNextIp());
 
-      await expect(authController.refreshToken({ refreshToken: reg.refreshToken }, getNextIp())).rejects.toThrow(
+      await expect(authController.refreshToken({ refreshToken: login.refreshToken }, getNextIp())).rejects.toThrow(
         UnauthorizedException,
       );
 
@@ -514,44 +651,26 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
     });
 
     it('POST /auth/logout -> Revokes current device session with LOGOUT', async () => {
-      const phone = getNextPhone();
-      await otpService.setPhoneVerified(phone);
-      const reg = await authController.register(
-        {
-          fullName: 'Logout Tester',
-          phoneNumber: phone,
-          password: 'Password123!',
-        },
-        getNextIp(),
-      );
+      const { registration, login } = await registerAndLogin('Logout Tester');
 
-      const logoutRes = await authController.logout(reg.userId, { refreshToken: reg.refreshToken });
+      const logoutRes = await authController.logout(registration.userId, { refreshToken: login.refreshToken });
       expect(logoutRes.message).toBeDefined();
 
-      const session = sessionsStore.find((s) => s.userId === reg.userId);
+      const session = sessionsStore.find((s) => s.userId === registration.userId);
       expect(session.revokedAt).not.toBeNull();
       expect(session.revokeReason).toBe('LOGOUT');
     });
 
     it('POST /auth/logout-all -> Increments tokenVersion and revokes all sessions with LOGOUT_ALL', async () => {
-      const phone = getNextPhone();
-      await otpService.setPhoneVerified(phone);
-      const reg = await authController.register(
-        {
-          fullName: 'Logout All Tester',
-          phoneNumber: phone,
-          password: 'Password123!',
-        },
-        getNextIp(),
-      );
+      const { registration } = await registerAndLogin('Logout All Tester');
 
-      const res = await authController.logoutAll(reg.userId);
+      const res = await authController.logoutAll(registration.userId);
       expect(res.message).toBeDefined();
 
-      const user = usersStore.get(reg.userId);
+      const user = usersStore.get(registration.userId);
       expect(user.tokenVersion).toBe(1);
 
-      const session = sessionsStore.find((s) => s.userId === reg.userId);
+      const session = sessionsStore.find((s) => s.userId === registration.userId);
       expect(session.revokedAt).not.toBeNull();
       expect(session.revokeReason).toBe('LOGOUT_ALL');
     });
@@ -571,12 +690,38 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
         isActive: true,
       };
       usersStore.set(user.userId, user);
+      const initialLogin = await authController.login(
+        { phoneNumber: phone, password: oldPass },
+        getNextIp(),
+        'Password Change Device',
+      );
+      const initialSession = sessionsStore.find((session) => session.userId === user.userId);
+      const previousPasswordHash = user.passwordHash;
 
+      const { otp } = await otpService.createAndSaveOtp(OtpPurpose.CHANGE_PASSWORD, phone);
       const res = await authController.changePassword(user.userId, {
         currentPassword: oldPass,
         newPassword: newPass,
+        otp,
+        refreshToken: initialLogin.refreshToken,
       });
       expect(res.message).toBeDefined();
+      expect(res.accessToken).toEqual(expect.any(String));
+      expect(res.refreshToken).toEqual(expect.any(String));
+      expect(res.tokenVersion).toBe(1);
+      expect(user.tokenVersion).toBe(1);
+      expect(user.passwordHash).not.toBe(previousPasswordHash);
+      await expect(bcrypt.compare(newPass, user.passwordHash)).resolves.toBe(true);
+      expect(initialSession.revokedAt).not.toBeNull();
+      expect(initialSession.revokeReason).toBe('PASSWORD_CHANGED');
+      const replacementSession = sessionsStore.find(
+        (session) => session.refreshTokenHash === crypto.createHash('sha256').update(res.refreshToken).digest('hex'),
+      );
+      expect(replacementSession).toMatchObject({
+        userId: user.userId,
+        tokenFamily: initialSession.tokenFamily,
+        revokedAt: null,
+      });
 
       await expect(
         authController.login({ phoneNumber: phone, password: oldPass }, getNextIp()),
@@ -584,6 +729,13 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
 
       const newLogin = await authController.login({ phoneNumber: phone, password: newPass }, getNextIp());
       expect(newLogin.accessToken).toBeDefined();
+      await expect(
+        authController.changePassword(user.userId, {
+          currentPassword: newPass,
+          newPassword: 'AnotherPassword123!',
+          otp,
+        }),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 
@@ -643,9 +795,38 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       const userId = 'u-del-1';
       usersStore.set(userId, { userId, fullName: 'To Delete', isActive: true });
 
-      const res = await usersController.deleteUser(userId);
+      usersStore.set('admin-id', { userId: 'admin-id', role: Role.MANAGER, isActive: true });
+      const res = await usersController.deleteUser(userId, 'admin-id');
       expect(res.message).toBeDefined();
       expect(usersStore.has(userId)).toBe(false);
+    });
+
+    it('Manager cannot patch or delete an ADMIN target', async () => {
+      const managerId = 'manager-rbac-id';
+      const adminId = 'admin-rbac-id';
+      usersStore.set(managerId, {
+        userId: managerId,
+        role: Role.MANAGER,
+        isActive: true,
+        isLocked: false,
+      });
+      usersStore.set(adminId, {
+        userId: adminId,
+        fullName: 'Protected Admin',
+        role: Role.ADMIN,
+        isActive: true,
+        isLocked: false,
+      });
+
+      await expect(
+        usersController.adminUpdateUser(adminId, { fullName: 'Tampered' }, managerId),
+      ).rejects.toThrow(ForbiddenException);
+      await expect(usersController.deleteUser(adminId, managerId)).rejects.toThrow(ForbiddenException);
+      expect(usersStore.get(adminId)).toMatchObject({
+        fullName: 'Protected Admin',
+        role: Role.ADMIN,
+        isActive: true,
+      });
     });
   });
   // ==========================================
@@ -944,24 +1125,20 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
     it('Flow A: Farmer Lifecycle (OTP -> Register -> Login -> Create Pond -> Set Threshold -> Create Manual Log -> Change Password -> Old Token Invalid)', async () => {
       // 1. Request OTP & Verify OTP
       const phone = getNextPhone();
-      const { otp } = await otpService.createAndSaveOtp(phone);
-      const verifyRes = await authController.verifyOtp({ phoneNumber: phone, otp });
+      const { otp } = await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
+      const verifyRes = await authController.verifyOtp({ phoneNumber: phone, otp, purpose: OtpPurpose.REGISTER });
       expect(verifyRes.isValid).toBe(true);
 
-      // 2. Register
-      const reg = await authController.register({
-        fullName: 'Le Van Nong Dan',
-        phoneNumber: phone,
-        password: 'Password123!',
-      });
-      expect(reg.accessToken).toBeDefined();
-      const farmerId = reg.userId;
-
-      // 3. Login
-      const login = await authController.login({
-        phoneNumber: phone,
-        password: 'Password123!',
-      });
+      // 2. Register through the actual service and authenticate with the emailed initial password.
+      const registration = await authController.register(
+        { fullName: 'Le Van Nong Dan', phoneNumber: phone, email: 'flow-a@example.invalid', role: Role.FARMER },
+        '10.0.0.1',
+        'Mozilla',
+      );
+      const farmerId = registration.userId;
+      const initialPassword = emailService.sendInitialPassword.mock.calls[0][3];
+      expect(initialPassword).toEqual(expect.any(String));
+      const login = await authController.login({ phoneNumber: phone, password: initialPassword }, '10.0.0.1', 'Mozilla');
       expect(login.accessToken).toBeDefined();
 
       // 4. Create Pond
@@ -991,14 +1168,17 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       expect(logRes.data.logId).toBeDefined();
 
       // 7. Change Password
+      const { otp: changeOtp } = await otpService.createAndSaveOtp(OtpPurpose.CHANGE_PASSWORD, phone);
       await authController.changePassword(farmerId, {
-        currentPassword: 'Password123!',
+        currentPassword: initialPassword,
         newPassword: 'NewPassword999!',
+        otp: changeOtp,
+        refreshToken: login.refreshToken,
       });
 
       // 8. Old password fails
       await expect(
-        authController.login({ phoneNumber: phone, password: 'Password123!' }),
+        authController.login({ phoneNumber: phone, password: initialPassword }),
       ).rejects.toThrow(UnauthorizedException);
 
       // 9. New password succeeds

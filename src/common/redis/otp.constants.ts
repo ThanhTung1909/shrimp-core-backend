@@ -1,5 +1,21 @@
 import { normalizePhone } from './rate-limit.constants.js';
 
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+export function getEmailOtpIdentifier(email: string): string {
+  return `email:${normalizeEmail(email)}`;
+}
+
+export function normalizeOtpIdentifier(identifier: string): string {
+  if (typeof identifier === 'string' && identifier.startsWith('email:')) {
+    const email = normalizeEmail(identifier.slice(6));
+    return email ? `email:${email}` : '';
+  }
+  return normalizePhone(identifier);
+}
+
 export enum OtpPurpose {
   REGISTER = 'REGISTER',
   RESET_PASSWORD = 'RESET_PASSWORD',
@@ -20,21 +36,21 @@ export const OTP_CONFIG = {
  * Khóa Redis lưu trữ SHA-256 hash của mã OTP.
  */
 export function getOtpCodeKey(purpose: OtpPurpose, phone: string): string {
-  return `otp:${purpose}:code:${normalizePhone(phone)}`;
+  return `otp:${purpose}:code:${normalizeOtpIdentifier(phone)}`;
 }
 
 /**
  * Khóa Redis lưu trữ số lần nhập sai của OTP hiện tại.
  */
 export function getOtpAttemptsKey(purpose: OtpPurpose, phone: string): string {
-  return `otp:${purpose}:attempts:${normalizePhone(phone)}`;
+  return `otp:${purpose}:attempts:${normalizeOtpIdentifier(phone)}`;
 }
 
 /**
  * Khóa Redis lưu trữ trạng thái đã xác thực thành công số điện thoại.
  */
 export function getOtpVerifiedKey(purpose: OtpPurpose, phone: string): string {
-  return `otp:${purpose}:verified:${normalizePhone(phone)}`;
+  return `otp:${purpose}:verified:${normalizeOtpIdentifier(phone)}`;
 }
 
 // Aliases

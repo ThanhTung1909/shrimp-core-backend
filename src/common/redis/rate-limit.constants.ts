@@ -7,7 +7,7 @@ export const RATE_LIMIT_CONFIG = {
   LOGIN: {
     IP_LIMIT: 10,
     IP_WINDOW: 60,
-    PHONE_LIMIT: 5,
+    PHONE_LIMIT: 20,
     PHONE_WINDOW: 300,
   },
   REFRESH: {

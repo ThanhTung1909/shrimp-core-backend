@@ -446,7 +446,7 @@ describe('DevicesService', () => {
         deviceId,
         pondId: null,
         macAddress: 'AA:BB:CC:DD:EE:FF',
-        pond: null,
+        pond: { userId: farmerId },
       };
 
       mockDeviceRepo.findOne.mockResolvedValue(device);

@@ -17,6 +17,7 @@ export interface ErrorResponseBody {
   timestamp: string;
   path: string;
   errors?: string[] | null;
+  data?: { channel: 'email' | 'sms'; otpStored: true; expiresIn: string } | null;
 }
 
 const VIETNAMESE_HTTP_MESSAGES: Record<number, string> = {
@@ -54,6 +55,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let message = 'Lỗi hệ thống nội bộ, vui lòng thử lại sau!';
     let errorCode = 'INTERNAL_SERVER_ERROR';
     let errors: string[] | null = null;
+    let data: ErrorResponseBody['data'] = null;
+
+    let retryAfterSeconds: number | undefined;
 
     if (exception instanceof HttpException) {
       statusCode = exception.getStatus();
@@ -79,6 +83,24 @@ export class AllExceptionsFilter implements ExceptionFilter {
             resObj.error
               ? String(resObj.error).toUpperCase().replace(/\s+/g, '_')
               : HttpStatus[statusCode] || 'HTTP_ERROR';
+
+          if (resObj.error === 'OTP_DELIVERY_UNAVAILABLE' && resObj.data && typeof resObj.data === 'object') {
+            const delivery = resObj.data as Record<string, unknown>;
+            if ((delivery.channel === 'email' || delivery.channel === 'sms') && delivery.otpStored === true) {
+              data = {
+                channel: delivery.channel,
+                otpStored: true,
+                expiresIn: typeof delivery.expiresIn === 'string' ? delivery.expiresIn : '5 phút',
+              };
+            }
+          }
+        }
+
+        if (statusCode === HttpStatus.TOO_MANY_REQUESTS) {
+          const rawRetryAfter = resObj.retryAfterSeconds ?? resObj.retryAfter;
+          if (typeof rawRetryAfter === 'number' && rawRetryAfter >= 0) {
+            retryAfterSeconds = Math.ceil(rawRetryAfter);
+          }
         }
       }
 
@@ -136,7 +158,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
       );
     }
 
-    const responseBody: ErrorResponseBody = {
+    if (retryAfterSeconds !== undefined) {
+      response.setHeader('Retry-After', String(retryAfterSeconds));
+    }
+
+    const responseBody: ErrorResponseBody & { retryAfterSeconds?: number } = {
       success: false,
       statusCode,
       message,
@@ -144,6 +170,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
       timestamp: new Date().toISOString(),
       path: request.url || request.originalUrl,
       ...(errors && errors.length > 0 ? { errors } : {}),
+      ...(data ? { data } : {}),
+      ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
     };
 
     response.status(statusCode).json(responseBody);

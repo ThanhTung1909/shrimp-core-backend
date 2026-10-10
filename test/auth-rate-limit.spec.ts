@@ -6,6 +6,7 @@ import { RateLimitService } from '../src/common/redis/rate-limit.service.js';
 import { AuthController } from '../src/modules/auth/auth.controller.js';
 import {
   RATE_LIMIT_CONFIG,
+  getLoginPhoneKey,
   normalizeIp,
   normalizePhone,
 } from '../src/common/redis/rate-limit.constants.js';
@@ -28,7 +29,9 @@ describe('AUTH RATE LIMIT INTEGRATION SUITE', () => {
     const configService = new ConfigService({
       REDIS_HOST: process.env.REDIS_HOST || 'localhost',
       REDIS_PORT: process.env.REDIS_PORT || 6379,
-      REDIS_DB: 0,
+      // This suite owns DB 13 on the dedicated Redis test instance. Other
+      // suites must not be able to delete its rate-limit keys mid-test.
+      REDIS_DB: 13,
     });
 
     redisService = new RedisService(configService);
@@ -92,7 +95,7 @@ describe('AUTH RATE LIMIT INTEGRATION SUITE', () => {
       expect(authService.login).toHaveBeenCalledTimes(10);
     });
 
-    it('Phone limit: 1..5 requests allowed, 6th blocked with 429', async () => {
+    it('Phone request budget allows the configured limit and blocks the next request', async () => {
       const phone = getNextPhone();
       const loginDto = { phoneNumber: phone, password: 'Password123!' };
 
@@ -101,7 +104,7 @@ describe('AUTH RATE LIMIT INTEGRATION SUITE', () => {
         const res = await authController.login(loginDto, getNextIp());
         expect(res).toBeDefined();
       }
-      expect(authService.login).toHaveBeenCalledTimes(5);
+      expect(authService.login).toHaveBeenCalledTimes(RATE_LIMIT_CONFIG.LOGIN.PHONE_LIMIT);
 
       // Request 6 should be blocked with 429
       try {
@@ -116,7 +119,7 @@ describe('AUTH RATE LIMIT INTEGRATION SUITE', () => {
       }
 
       // Downstream logic not called on blocked request
-      expect(authService.login).toHaveBeenCalledTimes(5);
+      expect(authService.login).toHaveBeenCalledTimes(RATE_LIMIT_CONFIG.LOGIN.PHONE_LIMIT);
     });
   });
 
@@ -339,6 +342,8 @@ describe('AUTH RATE LIMIT INTEGRATION SUITE', () => {
     it('Phone numbers with whitespace share the same rate limit bucket', async () => {
       const phone = getNextPhone();
       const phoneWithSpaces = `  ${phone.slice(0, 4)}   ${phone.slice(4)}  `;
+
+      expect(getLoginPhoneKey(phoneWithSpaces)).toBe(getLoginPhoneKey(phone));
 
       // 5 requests with whitespace
       for (let i = 0; i < RATE_LIMIT_CONFIG.LOGIN.PHONE_LIMIT; i++) {
