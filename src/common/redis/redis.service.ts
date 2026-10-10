@@ -133,4 +133,11 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     if (keys.length === 0) return 0;
     return this.client.exists(...keys);
   }
+
+  /**
+   * Đẩy thông điệp (Publish) lên một kênh Redis Pub/Sub.
+   */
+  async publish(channel: string, message: string): Promise<number> {
+    return this.client.publish(channel, message);
+  }
 }

@@ -84,7 +84,7 @@ export class PondsController {
   @ApiResponse({ status: 200, description: 'Chi tiết ao nuôi' })
   @ApiResponse({ status: 404, description: 'Không tìm thấy ao nuôi' })
   async findPondById(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) pondId: string,
+    @Param('id', ParseUUIDPipe) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ): Promise<Pond> {
@@ -96,7 +96,7 @@ export class PondsController {
   @ApiOperation({ summary: 'Quản trị viên cập nhật thông tin ao nuôi' })
   @ApiResponse({ status: 200, description: 'Cập nhật ao nuôi thành công' })
   async updatePond(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) pondId: string,
+    @Param('id', ParseUUIDPipe) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() updatePondDto: UpdatePondDto,
@@ -118,7 +118,7 @@ export class PondsController {
   @ApiOperation({ summary: 'Quản trị viên xóa ao nuôi' })
   @ApiResponse({ status: 200, description: 'Xóa ao nuôi thành công' })
   async deletePond(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) pondId: string,
+    @Param('id', ParseUUIDPipe) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ): Promise<MessageOnlyResponse> {
@@ -135,7 +135,7 @@ export class PondsController {
   @ApiResponse({ status: 201, description: 'Tạo cấu hình ngưỡng thành công' })
   @ApiResponse({ status: 409, description: 'Cấu hình ngưỡng thông số này đã tồn tại trong ao' })
   async createThreshold(
-    @Param('pondId', new ParseUUIDPipe({ version: '4' })) pondId: string,
+    @Param('pondId', ParseUUIDPipe) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: CreateThresholdConfigDto,
@@ -156,7 +156,7 @@ export class PondsController {
   @ApiOperation({ summary: 'Lấy danh sách cấu hình ngưỡng cảnh báo của một ao nuôi' })
   @ApiResponse({ status: 200, description: 'Danh sách cấu hình ngưỡng' })
   async findThresholdsByPond(
-    @Param('pondId', new ParseUUIDPipe({ version: '4' })) pondId: string,
+    @Param('pondId', ParseUUIDPipe) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ): Promise<ThresholdResponse[]> {
@@ -168,7 +168,7 @@ export class PondsController {
   @ApiOperation({ summary: 'Cập nhật khoảng giá trị min/max ngưỡng cảnh báo' })
   @ApiResponse({ status: 200, description: 'Cập nhật ngưỡng thành công' })
   async updateThreshold(
-    @Param('configId', new ParseUUIDPipe({ version: '4' })) configId: string,
+    @Param('configId', ParseUUIDPipe) configId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: UpdateThresholdConfigDto,
@@ -190,7 +190,7 @@ export class PondsController {
   @ApiOperation({ summary: 'Xóa cấu hình ngưỡng cảnh báo' })
   @ApiResponse({ status: 200, description: 'Xóa cấu hình ngưỡng thành công' })
   async deleteThreshold(
-    @Param('configId', new ParseUUIDPipe({ version: '4' })) configId: string,
+    @Param('configId', ParseUUIDPipe) configId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ): Promise<MessageOnlyResponse> {
@@ -205,7 +205,7 @@ export class PondsController {
   @ApiOperation({ summary: 'Ghi nhận nhật ký đo chất lượng nước thủ công (NH3, NO2,...)' })
   @ApiResponse({ status: 201, description: 'Ghi nhật ký thành công' })
   async createManualLog(
-    @Param('pondId', new ParseUUIDPipe({ version: '4' })) pondId: string,
+    @Param('pondId', ParseUUIDPipe) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: CreateManualTestLogDto,
@@ -226,7 +226,7 @@ export class PondsController {
   @ApiOperation({ summary: 'Lấy danh sách nhật ký đo thủ công theo ao nuôi (Có phân trang & Lọc thời gian)' })
   @ApiResponse({ status: 200, description: 'Danh sách bản ghi đo thủ công' })
   async findManualLogsByPond(
-    @Param('pondId', new ParseUUIDPipe({ version: '4' })) pondId: string,
+    @Param('pondId', ParseUUIDPipe) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Query() query: FindManualTestLogsQueryDto,
@@ -238,7 +238,7 @@ export class PondsController {
   @ApiOperation({ summary: 'Lấy chi tiết một bản ghi đo thủ công theo UUID' })
   @ApiResponse({ status: 200, description: 'Chi tiết bản ghi đo thủ công' })
   async findManualLogById(
-    @Param('logId', new ParseUUIDPipe({ version: '4' })) logId: string,
+    @Param('logId', ParseUUIDPipe) logId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ): Promise<ManualTestLog> {
@@ -249,7 +249,7 @@ export class PondsController {
   @ApiOperation({ summary: 'Cập nhật bản ghi đo thủ công' })
   @ApiResponse({ status: 200, description: 'Cập nhật bản ghi thành công' })
   async updateManualLog(
-    @Param('logId', new ParseUUIDPipe({ version: '4' })) logId: string,
+    @Param('logId', ParseUUIDPipe) logId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
     @Body() dto: UpdateManualTestLogDto,
@@ -270,7 +270,7 @@ export class PondsController {
   @ApiOperation({ summary: 'Xóa bản ghi đo thủ công' })
   @ApiResponse({ status: 200, description: 'Xóa bản ghi thành công' })
   async deleteManualLog(
-    @Param('logId', new ParseUUIDPipe({ version: '4' })) logId: string,
+    @Param('logId', ParseUUIDPipe) logId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ): Promise<MessageOnlyResponse> {

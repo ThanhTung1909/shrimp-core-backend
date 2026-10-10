@@ -9,6 +9,7 @@ import { QueryTelemetryDto } from './dto/query-telemetry.dto.js';
 import { Alert } from '../alerts/entities/alert.entity.js';
 import { AlertLevel } from '../../common/enums/alert-level.enum.js';
 import { AlertStatus } from '../../common/enums/alert-status.enum.js';
+import { RedisService } from '../../common/redis/redis.service.js';
 
 @Injectable()
 export class TelemetryService implements OnModuleInit {
@@ -22,7 +23,8 @@ export class TelemetryService implements OnModuleInit {
     @InjectRepository(Alert)
     private readonly alertRepo: Repository<Alert>,
     private readonly dataSource: DataSource,
-  ) { }
+    private readonly redisService?: RedisService,
+  ) {}
 
   async onModuleInit() {
     await this.ensureTimescaleDbConfig();
@@ -74,10 +76,23 @@ export class TelemetryService implements OnModuleInit {
    * Xử lý gói tin dữ liệu cảm biến từ MQTT:
    * 1. Kiểm tra thiết bị trong CSDL (Device)
    * 2. Nếu không tìm thấy: Ghi Security Warning Log và từ chối lưu
-   * 3. Nếu hợp lệ: Lưu dữ liệu vào TimescaleDB và cập nhật thiết bị sang ONLINE + lastActiveAt
+   * 3. Nếu hợp lệ: Lưu dữ liệu vào TimescaleDB, cập nhật thiết bị ONLINE và Publish sự kiện real-time lên Redis Pub/Sub
    */
   async processTelemetryPayload(dto: CreateTelemetryDto): Promise<TelemetryData | null> {
-    const device = await this.deviceRepo.findOne({ where: { deviceId: dto.deviceId } });
+    const device = await this.deviceRepo.findOne({
+      where: { deviceId: dto.deviceId },
+      relations: { pond: true },
+      select: {
+        deviceId: true,
+        pondId: true,
+        status: true,
+        lastActiveAt: true,
+        pond: {
+          pondId: true,
+          userId: true,
+        },
+      },
+    });
 
     if (!device) {
       this.logger.warn(
@@ -111,6 +126,22 @@ export class TelemetryService implements OnModuleInit {
     this.logger.log(
       `[Telemetry] Đã lưu dữ liệu cảm biến cho thiết bị ${dto.deviceId} vào TimescaleDB.`,
     );
+
+    // Bắn sự kiện telemetry:new qua Redis Pub/Sub để TelemetryGateway đẩy xuống WebSocket client
+    if (this.redisService) {
+      try {
+        await this.redisService.publish(
+          'telemetry:new',
+          JSON.stringify({
+            pondId: device.pondId,
+            userId: device.pond?.userId || null,
+            data: savedRecord,
+          }),
+        );
+      } catch (err: any) {
+        this.logger.error(`[Redis Publish Error] Lỗi publish telemetry:new: ${err.message}`);
+      }
+    }
 
     return savedRecord;
   }
@@ -164,7 +195,21 @@ export class TelemetryService implements OnModuleInit {
   }
 
   async updateDeviceStatus(deviceId: string, status: DeviceStatus): Promise<Device | null> {
-    const device = await this.deviceRepo.findOne({ where: { deviceId } });
+    const device = await this.deviceRepo.findOne({
+      where: { deviceId },
+      relations: { pond: true },
+      select: {
+        deviceId: true,
+        deviceName: true,
+        pondId: true,
+        status: true,
+        lastActiveAt: true,
+        pond: {
+          pondId: true,
+          userId: true,
+        },
+      },
+    });
     if (!device) {
       return null;
     }
@@ -196,7 +241,23 @@ export class TelemetryService implements OnModuleInit {
           status: AlertStatus.ACTIVE,
           message: `Thiết bị ${device.deviceName || device.deviceId} mất kết nối mạng đột ngột hoặc quá hạn phản hồi`,
         });
-        await this.alertRepo.save(newAlert);
+        const savedAlert = await this.alertRepo.save(newAlert);
+
+        // Publish alert:triggered lên Redis Pub/Sub
+        if (this.redisService) {
+          try {
+            await this.redisService.publish(
+              'alert:triggered',
+              JSON.stringify({
+                pondId: device.pondId,
+                userId: device.pond?.userId || null,
+                alert: savedAlert,
+              }),
+            );
+          } catch (err: any) {
+            this.logger.error(`[Redis Publish Error] Lỗi publish alert:triggered: ${err.message}`);
+          }
+        }
       }
     }
 
