@@ -9,6 +9,7 @@ import { QueryTelemetryDto } from './dto/query-telemetry.dto.js';
 import { Alert } from '../alerts/entities/alert.entity.js';
 import { AlertLevel } from '../../common/enums/alert-level.enum.js';
 import { AlertStatus } from '../../common/enums/alert-status.enum.js';
+import { Role } from '../../common/enums/role.enum.js';
 
 @Injectable()
 export class TelemetryService implements OnModuleInit {
@@ -76,6 +77,13 @@ export class TelemetryService implements OnModuleInit {
    * 2. Nếu không tìm thấy: Ghi Security Warning Log và từ chối lưu
    * 3. Nếu hợp lệ: Lưu dữ liệu vào TimescaleDB và cập nhật thiết bị sang ONLINE + lastActiveAt
    */
+  async checkDeviceAccess(deviceId: string, userId: string, role: Role): Promise<boolean> {
+    if (role === Role.ADMIN || role === Role.MANAGER) return true;
+    const device = await this.deviceRepo.findOne({ where: { deviceId }, relations: { pond: true } });
+    if (!device || !device.pond) return false;
+    return device.pond.userId === userId;
+  }
+
   async processTelemetryPayload(dto: CreateTelemetryDto): Promise<TelemetryData | null> {
     const device = await this.deviceRepo.findOne({ where: { deviceId: dto.deviceId } });
 

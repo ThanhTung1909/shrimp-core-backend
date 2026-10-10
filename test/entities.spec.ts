@@ -123,16 +123,24 @@ describe('TypeORM Entities & Relations Test (DB-02)', () => {
     expect(foundUser?.ponds[0].thresholdConfigs.length).toBe(1);
     expect(foundUser?.ponds[0].thresholdConfigs[0].metricName).toBe('pH');
 
-    // 7. Kiểm tra Cascade Delete: Xóa User thì toàn bộ Pond, Device, Threshold, Telemetry liên quan tự xóa
+    // 7. Xóa User sẽ cascade Pond/Threshold. Device được giữ lại nhưng tách
+    // khỏi Pond theo Device.pond onDelete: SET NULL để bảo toàn hardware asset.
     await userRepo.delete(savedUser.userId);
 
     const checkPond = await pondRepo.findOne({ where: { pondId: savedPond.pondId } });
     expect(checkPond).toBeNull();
 
     const checkDevice = await deviceRepo.findOne({ where: { deviceId: savedDevice.deviceId } });
-    expect(checkDevice).toBeNull();
+    expect(checkDevice).toMatchObject({
+      deviceId: savedDevice.deviceId,
+      pondId: null,
+    });
 
     const checkThreshold = await thresholdRepo.findOne({ where: { configId: savedThreshold.configId } });
     expect(checkThreshold).toBeNull();
+
+    // The detached Device is intentionally preserved by the product contract;
+    // remove this test fixture explicitly so the isolated integration DB stays clean.
+    await deviceRepo.delete(savedDevice.deviceId);
   });
 });

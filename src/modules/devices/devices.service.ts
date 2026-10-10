@@ -188,6 +188,7 @@ export class DevicesService {
     if (dto.firmwareVersion !== undefined)
       device.firmwareVersion = dto.firmwareVersion;
     if (dto.status !== undefined) device.status = dto.status;
+    if (dto.lastActiveAt !== undefined) device.lastActiveAt = new Date(dto.lastActiveAt);
 
     return await this.deviceRepo.save(device);
   }

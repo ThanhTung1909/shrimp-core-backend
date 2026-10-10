@@ -6,6 +6,7 @@ import { UsersService } from '../../users/users.service.js';
 import { User } from '../../users/entities/user.entity.js';
 import { RedisService } from '../../../common/redis/redis.service.js';
 import { getAccessTokenBlacklistKey } from '../../../common/redis/rate-limit.constants.js';
+import { getLoginPendingManualKey } from '../../../common/redis/login-lockout.constants.js';
 
 export interface JwtPayload {
   sub: string;
@@ -59,6 +60,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       if (isBlacklisted !== null) {
         throw new UnauthorizedException('Token đã bị thu hồi!');
       }
+      if (await this.redisService.get(getLoginPendingManualKey(payload.sub)) !== null) {
+        throw new UnauthorizedException('Token không hợp lệ!');
+      }
     } catch (error) {
       if (error instanceof UnauthorizedException) {
         throw error;
@@ -69,7 +73,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     const user = await this.usersService.findById(payload.sub);
 
-    if (!user || !user.isActive) {
+    if (!user || !user.isActive || user.isLocked) {
       throw new UnauthorizedException(
         'Tài khoản không tồn tại hoặc đã bị khóa!',
       );

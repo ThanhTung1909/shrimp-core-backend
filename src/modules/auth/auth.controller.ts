@@ -50,6 +50,7 @@ import { Gender } from '../../common/enums/gender.enum.js';
 import { JwtService } from '@nestjs/jwt';
 
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { getEmailOtpIdentifier } from '../../common/redis/otp.constants.js';
 
 export interface AuthenticatedRequest extends Request {
   user: Omit<User, 'passwordHash'>;
@@ -134,7 +135,7 @@ export class AuthController {
 
   @Public()
   @Post('send-otp')
-  @ApiOperation({ summary: 'Gửi mã xác thực OTP qua SMS/Email' })
+  @ApiOperation({ summary: 'Gửi mã xác thực OTP qua SMS' })
   @ApiResponse({ status: 200, description: 'Gửi mã OTP thành công' })
   @ApiResponse({ status: 429, description: 'Gửi quá nhiều yêu cầu OTP' })
   async sendOtp(
@@ -143,7 +144,6 @@ export class AuthController {
   ): Promise<{
     message: string;
     phoneNumber: string;
-    otp?: string;
     expiresIn: string;
   }> {
     await this.applyRateLimit(
@@ -161,23 +161,25 @@ export class AuthController {
 
   /**
    * POST /auth/forgot-password
-   * Public endpoint. Triggers a RESET_PASSWORD OTP for the given phoneNumber.
-   * Anti-enumeration: always returns 200 with a consistent message.
-   * Reuses the existing OTP/SMS infrastructure via sendOtp internally.
+   * Public endpoint. Triggers a RESET_PASSWORD OTP via SMS or email.
+   * Missing recovery accounts intentionally return 404 by product policy.
    */
   @Public()
   @Post('forgot-password')
+  @ApiOperation({ summary: 'Gửi OTP đặt lại mật khẩu qua SMS hoặc Email (chỉ một định danh)' })
   async forgotPassword(
     @Body() dto: ForgotPasswordDto,
     @Ip() ip?: string,
   ): Promise<{
     message: string;
-    phoneNumber: string;
-    otp?: string;
+    phoneNumber?: string;
+    email?: string;
     expiresIn: string;
   }> {
     await this.applyRateLimit(
-      getOtpSendPhoneKey(dto.phoneNumber),
+      dto.email !== undefined
+        ? `rl:otp:send:${getEmailOtpIdentifier(dto.email)}`
+        : getOtpSendPhoneKey(dto.phoneNumber),
       RATE_LIMIT_CONFIG.OTP_SEND.PHONE_LIMIT,
       RATE_LIMIT_CONFIG.OTP_SEND.PHONE_WINDOW,
     );
@@ -186,7 +188,7 @@ export class AuthController {
       RATE_LIMIT_CONFIG.OTP_SEND.IP_LIMIT,
       RATE_LIMIT_CONFIG.OTP_SEND.IP_WINDOW,
     );
-    return this.authService.forgotPassword(dto.phoneNumber);
+    return this.authService.forgotPassword(dto.phoneNumber, dto.email);
   }
 
   @Public()
@@ -199,7 +201,9 @@ export class AuthController {
     @Headers('user-agent') userAgent?: string,
   ): Promise<any> {
     await this.applyRateLimit(
-      getOtpVerifyPhoneKey(verifyOtpDto.phoneNumber),
+      verifyOtpDto.email !== undefined
+        ? `rl:otp:verify:${getEmailOtpIdentifier(verifyOtpDto.email)}`
+        : getOtpVerifyPhoneKey(verifyOtpDto.phoneNumber),
       RATE_LIMIT_CONFIG.OTP_VERIFY.PHONE_LIMIT,
       RATE_LIMIT_CONFIG.OTP_VERIFY.PHONE_WINDOW,
     );
@@ -217,6 +221,7 @@ export class AuthController {
     @Body() registerDto: RegisterDto,
     @Ip() ip?: string,
     @Headers('user-agent') userAgent?: string,
+    @CurrentUser('userId') actorId?: string,
   ): Promise<{
     message: string;
     userId: string;
@@ -230,7 +235,7 @@ export class AuthController {
       RATE_LIMIT_CONFIG.REGISTER.IP_LIMIT,
       RATE_LIMIT_CONFIG.REGISTER.IP_WINDOW,
     );
-    return this.authService.register(registerDto, userAgent);
+    return this.authService.register(registerDto, userAgent, actorId);
   }
 
   @Public()

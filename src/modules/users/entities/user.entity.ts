@@ -58,6 +58,9 @@ export class User {
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
+  // Reuse the existing database flag for durable locks; cooldown stays in Redis.
+  @Column({ name: 'isLocked', type: 'boolean', default: false })
+  isLocked: boolean;
   @Column({
     name: 'must_change_password',
     type: 'boolean',

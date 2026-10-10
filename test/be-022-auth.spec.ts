@@ -13,6 +13,8 @@ import { OtpPurpose } from '../src/common/redis/otp.constants.js';
 import { UnauthorizedException, BadRequestException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { LoginLockoutService } from '../src/common/redis/login-lockout.service.js';
+import { authLockoutFixture } from './helpers/auth-lockout-fixture.js';
 
 vi.mock('bcrypt', () => ({
   compare: vi.fn(),
@@ -62,6 +64,7 @@ describe('BE-022 Authentication Tests', () => {
         { provide: DataSource, useValue: dataSource },
         { provide: EmailService, useValue: {} },
         { provide: EsmsService, useValue: { sendSMS: vi.fn() } },
+        { provide: LoginLockoutService, useValue: authLockoutFixture(usersService, dataSource) },
       ],
     }).compile();
 
@@ -77,7 +80,7 @@ describe('BE-022 Authentication Tests', () => {
     });
 
     it('should reject reset password if OTP verification marker is invalid or expired', async () => {
-      usersService.findByPhoneNumber.mockResolvedValue({ userId: '1', isActive: true });
+      usersService.findByPhoneNumber.mockResolvedValue({ userId: '1', phoneNumber: '0901234567', isActive: true });
       otpService.consumePhoneVerified.mockResolvedValue(false);
 
       await expect(
@@ -87,7 +90,7 @@ describe('BE-022 Authentication Tests', () => {
     });
 
     it('should successfully reset password, increment tokenVersion and revoke old sessions', async () => {
-      usersService.findByPhoneNumber.mockResolvedValue({ userId: 'u1', isActive: true });
+      usersService.findByPhoneNumber.mockResolvedValue({ userId: 'u1', phoneNumber: '0901234567', isActive: true });
       otpService.consumePhoneVerified.mockResolvedValue(true);
 
       const res = await authService.resetPassword({ phoneNumber: '0901234567', newPassword: 'Password123' });

@@ -1,9 +1,13 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
+  Logger,
+  NotFoundException,
   Optional,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -21,18 +25,21 @@ import { VerifyOtpDto } from './dto/verify-otp.dto.js';
 import { ResetPasswordDto } from './dto/reset-password.dto.js';
 import { Role } from '../../common/enums/role.enum.js';
 import { UserSession } from './entities/user-session.entity.js';
+import { User } from '../users/entities/user.entity.js';
 import { OtpService } from './otp.service.js';
 import { normalizePhone, getAccessTokenBlacklistKey } from '../../common/redis/rate-limit.constants.js';
-import { OtpPurpose } from '../../common/redis/otp.constants.js';
+import { getEmailOtpIdentifier, normalizeEmail, OTP_CONFIG, OtpPurpose } from '../../common/redis/otp.constants.js';
 import { RedisService } from '../../common/redis/redis.service.js';
 import { EmailService } from '../email/email.service.js';
 import { EsmsService } from '../../common/esms/esms.service.js';
+import { LoginLockoutService } from '../../common/redis/login-lockout.service.js';
 
 const DUMMY_HASH =
   '$2b$10$e8N8y2D2.f6Zf2g8H6J7K.1234567890abcdefghijklmnopqrstuv';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   constructor(
     private readonly userService: UsersService,
     private readonly jwtService: JwtService,
@@ -46,13 +53,64 @@ export class AuthService {
     private readonly otpService?: OtpService,
     @Optional()
     private readonly redisService?: RedisService,
+    @Optional()
+    private readonly loginLockoutService?: LoginLockoutService,
   ) {}
+
+  private isLocalOtpConsoleEnabled(): boolean {
+    const getConfig = this.configService?.get?.bind(this.configService);
+    if (!getConfig) return false;
+    const nodeEnv = getConfig<string>('NODE_ENV')?.trim().toLowerCase();
+    const consoleEnabled = getConfig<string>('AUTH_OTP_CONSOLE_FALLBACK')?.trim().toLowerCase() === 'true';
+    return nodeEnv === 'development' && consoleEnabled;
+  }
+
+  /** Logs only an OTP that OtpService has already persisted successfully. */
+  private logLocalOtp(purpose: OtpPurpose, channel: 'email' | 'sms', otp: string): void {
+    if (this.isLocalOtpConsoleEnabled()) {
+      this.logger.log(`[AuthOTP][LOCAL-TEST-ONLY] Purpose: ${purpose}`);
+      this.logger.log(`[AuthOTP][LOCAL-TEST-ONLY] Channel: ${channel}`);
+      this.logger.log(`[AuthOTP][LOCAL-TEST-ONLY] OTP: ${otp}`);
+      this.logger.log(`[AuthOTP][LOCAL-TEST-ONLY] Redis TTL: ${OTP_CONFIG.TTL_SECONDS}s`);
+    }
+  }
+
+  private getOtpDeliveryTimeoutMs(): number {
+    const getConfig = this.configService?.get?.bind(this.configService);
+    const configured = Number(getConfig?.('AUTH_OTP_DELIVERY_TIMEOUT_MS'));
+    return Number.isInteger(configured) && configured >= 1_000 && configured <= 30_000
+      ? configured
+      : 10_000;
+  }
+
+  private async deliverOtp(
+    channel: 'email' | 'sms',
+    send: () => Promise<unknown>,
+  ): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('OTP delivery timed out')), this.getOtpDeliveryTimeoutMs());
+    });
+
+    try {
+      await Promise.race([Promise.resolve().then(send), timeout]);
+    } catch {
+      const provider = channel === 'email' ? 'SMTP' : 'eSMS';
+      this.logger.error(`[AuthOTP] ${provider} delivery failed`);
+      throw new ServiceUnavailableException({
+        message: `Dịch vụ gửi ${channel === 'email' ? 'email' : 'SMS'} bên thứ ba đang gặp lỗi. Vui lòng thử lại sau.`,
+        error: 'OTP_DELIVERY_UNAVAILABLE',
+        data: { channel, otpStored: true, expiresIn: '5 phút' },
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
 
   //Hàm gửi OTP (Lưu SHA-256 hash vào Redis với TTL 5 phút)
   async sendOtp(sendOtpDto: SendOtpDto): Promise<{
     message: string;
     phoneNumber: string;
-    otp?: string;
     expiresIn: string;
   }> {
     const existingUser = await this.userService.findByPhoneNumber(
@@ -64,180 +122,140 @@ export class AuthService {
       );
     }
 
-      if (sendOtpDto.purpose === OtpPurpose.LOGIN && !existingUser) {
-        throw new UnauthorizedException('Tài khoản không tồn tại trong hệ thống!');
-      }
+    if (sendOtpDto.purpose === OtpPurpose.LOGIN && !existingUser) {
+      throw new UnauthorizedException('Tài khoản không tồn tại trong hệ thống!');
+    }
 
-      if (
-        sendOtpDto.purpose === OtpPurpose.RESET_PASSWORD &&
-        !existingUser
-      ) {
-        return {
-          message: 'Nếu số điện thoại hợp lệ, mã OTP đã được gửi',
-          phoneNumber: sendOtpDto.phoneNumber,
-          expiresIn: '5 phút',
-        };
-      }
+    if (sendOtpDto.purpose === OtpPurpose.RESET_PASSWORD && !existingUser) {
+      throw new NotFoundException('Tài khoản không tồn tại');
+    }
 
-      if (
-        sendOtpDto.purpose === OtpPurpose.CHANGE_PASSWORD &&
-        !existingUser
-      ) {
-        throw new UnauthorizedException('Tài khoản không tồn tại trong hệ thống!');
-      }
+    if (sendOtpDto.purpose === OtpPurpose.CHANGE_PASSWORD && !existingUser) {
+      throw new UnauthorizedException('Tài khoản không tồn tại trong hệ thống!');
+    }
 
-      let otp: string | undefined;
-      if (this.otpService) {
-        const result = await this.otpService.createAndSaveOtp(
-          sendOtpDto.purpose,
-          sendOtpDto.phoneNumber,
+    if (existingUser && sendOtpDto.purpose !== OtpPurpose.REGISTER && !existingUser.isActive) {
+      throw new ForbiddenException('Tài khoản đã bị vô hiệu hóa');
+    }
+
+    if (!this.otpService) {
+        throw new InternalServerErrorException(
+          'Dịch vụ OTP chưa sẵn sàng, vui lòng liên hệ quản trị viên!',
         );
-        otp = result.otp;
+    }
 
-        // Gửi SMS qua eSMS
-        await this.esmsService.sendSMS(sendOtpDto.phoneNumber, otp);
-      } else {
-        if (process.env.NODE_ENV === 'production') {
-          throw new InternalServerErrorException(
-            'Dịch vụ OTP chưa sẵn sàng, vui lòng liên hệ quản trị viên!',
-          );
-        }
-        otp = '123456';
-      }
+    const { otp } = await this.otpService.createAndSaveOtp(
+      sendOtpDto.purpose,
+      sendOtpDto.phoneNumber,
+    );
+    this.logLocalOtp(sendOtpDto.purpose, 'sms', otp);
+    await this.deliverOtp('sms', () => this.esmsService.sendSMS(sendOtpDto.phoneNumber, otp));
 
-      const response = {
-        message: 'Mã OTP đã được gửi thành công!',
-        phoneNumber: sendOtpDto.phoneNumber,
-        ...(process.env.NODE_ENV === 'production' ? {} : { otp }),
-        expiresIn: '5 phút',
-      };
-
-      if (sendOtpDto.purpose === OtpPurpose.RESET_PASSWORD) {
-        return {
-          message: 'Nếu số điện thoại hợp lệ, mã OTP đã được gửi',
-          phoneNumber: sendOtpDto.phoneNumber,
-          expiresIn: '5 phút',
-        };
-      }
-
-      return response;
+    return {
+      message: sendOtpDto.purpose === OtpPurpose.RESET_PASSWORD
+        ? 'Nếu số điện thoại hợp lệ, mã OTP đã được gửi'
+        : 'Mã OTP đã được gửi thành công!',
+      phoneNumber: sendOtpDto.phoneNumber,
+      expiresIn: '5 phút',
+    };
   }
 
   /**
    * POST /auth/forgot-password — thin alias for sendOtp with RESET_PASSWORD purpose.
    * Accepts only phoneNumber; purpose is hardcoded so this endpoint is self-contained.
-   * Anti-enumeration: same response shape regardless of whether the phone is registered.
+   * Product policy intentionally returns 404 when the recovery account does not exist.
    */
-  async forgotPassword(phoneNumber: string): Promise<{
+  async forgotPassword(phoneNumber?: string, email?: string): Promise<{
     message: string;
-    phoneNumber: string;
-    otp?: string;
+    phoneNumber?: string;
+    email?: string;
     expiresIn: string;
   }> {
+    if (email !== undefined) {
+      const normalizedEmail = normalizeEmail(email);
+      if (!this.otpService) throw new InternalServerErrorException('Dịch vụ OTP chưa sẵn sàng!');
+      const user = await this.userService.findByNormalizedEmail(normalizedEmail);
+      if (!user) throw new NotFoundException('Tài khoản không tồn tại');
+      if (!user.isActive) throw new ForbiddenException('Tài khoản đã bị vô hiệu hóa');
+
+      const { otp } = await this.otpService.createAndSaveOtp(
+        OtpPurpose.RESET_PASSWORD,
+        getEmailOtpIdentifier(normalizedEmail),
+      );
+      this.logLocalOtp(OtpPurpose.RESET_PASSWORD, 'email', otp);
+      await this.deliverOtp('email', () => this.emailService.sendPasswordResetOtp(normalizedEmail, otp));
+      return { message: 'Nếu email hợp lệ, mã OTP đã được gửi', email: normalizedEmail, expiresIn: '5 phút' };
+    }
+    if (phoneNumber === undefined) throw new BadRequestException('Cần cung cấp số điện thoại hoặc email!');
     return this.sendOtp({ phoneNumber, purpose: OtpPurpose.RESET_PASSWORD });
   }
 
 
   //Hàm xác thực OTP (Xác thực atomic bằng Redis Lua Script)
   async verifyOtp(verifyOtpDto: VerifyOtpDto, deviceName?: string | null): Promise<any> {
+    const email = verifyOtpDto.email;
+    if (email !== undefined && verifyOtpDto.purpose !== OtpPurpose.RESET_PASSWORD) {
+      throw new BadRequestException('Email OTP chỉ hỗ trợ RESET_PASSWORD!');
+    }
+    const identifier = email !== undefined ? getEmailOtpIdentifier(email) : verifyOtpDto.phoneNumber;
     if (this.otpService) {
       await this.otpService.verifyOtp(
         verifyOtpDto.purpose,
-        verifyOtpDto.phoneNumber,
+        identifier,
         verifyOtpDto.otp,
       );
     } else {
-      if (process.env.NODE_ENV === 'production') {
-        throw new InternalServerErrorException(
-          'Dịch vụ OTP chưa sẵn sàng, vui lòng liên hệ quản trị viên!',
-        );
-      }
-      const MOCK_OTP = '123456';
-      if (verifyOtpDto.otp !== MOCK_OTP) {
-        throw new BadRequestException(
-          'Mã OTP không chính xác hoặc đã hết hạn!',
-        );
-      }
+      throw new InternalServerErrorException(
+        'Dịch vụ OTP chưa sẵn sàng, vui lòng liên hệ quản trị viên!',
+      );
     }
 
     if (verifyOtpDto.purpose === OtpPurpose.LOGIN) {
-      if (this.otpService) {
-        await this.otpService.consumePhoneVerified(verifyOtpDto.purpose, verifyOtpDto.phoneNumber);
-      }
-
       const user = await this.userService.findByPhoneNumber(verifyOtpDto.phoneNumber, true);
       if (!user) {
         throw new UnauthorizedException('Tài khoản không tồn tại trong hệ thống!');
       }
-
-      if (!user.isActive) {
-        throw new UnauthorizedException(
-          'Tài khoản của bạn đã bị khóa hoặc ngừng hoạt động. Vui lòng liên hệ quản trị viên!',
-        );
-      }
-
-      const accessPayload = {
-        sub: user.userId,
-        phoneNumber: user.phoneNumber,
-        tokenVersion: user.tokenVersion,
-        role: user.role,
-        type: 'access',
-      };
-
-      const refreshPayload = {
-        sub: user.userId,
-        tokenVersion: user.tokenVersion,
-        role: user.role,
-        type: 'refresh',
-      };
-
-      const accessToken = await this.jwtService.signAsync(accessPayload, {
-        jwtid: crypto.randomUUID(),
+      const lockout = this.loginLockoutService;
+      if (!lockout) throw new InternalServerErrorException('Dịch vụ xác thực tạm thời không khả dụng.');
+      return lockout.withUserLock(user.userId, async (current, manager, afterCommit) => {
+        const state = await lockout.getState(user.userId);
+        // A verified one-time LOGIN OTP may recover a temporary password
+        // cooldown, but can never bypass a durable/manual lock.
+        lockout.assertNotLocked(current, state, false);
+        if (this.otpService) {
+          const consumed = await this.otpService.consumePhoneVerified(OtpPurpose.LOGIN, verifyOtpDto.phoneNumber);
+          if (!consumed) throw new UnauthorizedException('Mã OTP không hợp lệ hoặc đã được sử dụng!');
+        }
+        const accessToken = await this.jwtService.signAsync({
+          sub: current!.userId, phoneNumber: current!.phoneNumber, tokenVersion: current!.tokenVersion,
+          role: current!.role, type: 'access',
+        }, { jwtid: crypto.randomUUID() });
+        const refreshToken = await this.jwtService.signAsync({
+          sub: current!.userId, tokenVersion: current!.tokenVersion, role: current!.role, type: 'refresh',
+        }, {
+          secret: this.configService.get<string>('JWT_REFRESH_SECRET'), algorithm: 'HS256',
+          expiresIn: (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d') as any,
+          jwtid: crypto.randomUUID(),
+        });
+        const decoded = this.jwtService.decode(refreshToken) as { exp?: number } | null;
+        if (!decoded?.exp || !Number.isFinite(decoded.exp)) throw new UnauthorizedException('Lỗi khởi tạo phiên đăng nhập!');
+        const session = manager.create(UserSession, {
+          userId: current!.userId, refreshTokenHash: crypto.createHash('sha256').update(refreshToken).digest('hex'),
+          tokenFamily: crypto.randomUUID(), deviceName: deviceName || null, expiresAt: new Date(decoded.exp * 1000),
+        });
+        await manager.save(UserSession, session);
+        afterCommit(() => lockout.resetLoginFailureState(current!.userId, 'OTP_LOGIN'));
+        return {
+          message: 'Đăng nhập thành công!', userId: current!.userId, fullName: current!.fullName,
+          phoneNumber: current!.phoneNumber, role: current!.role, tokenVersion: current!.tokenVersion,
+          mustChangePassword: current!.mustChangePassword, accessToken, refreshToken,
+        };
       });
-
-      const refreshToken = await this.jwtService.signAsync(refreshPayload, {
-        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
-        algorithm: 'HS256',
-        expiresIn: (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d') as any,
-        jwtid: crypto.randomUUID(),
-      });
-
-      const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
-      const tokenFamily = crypto.randomUUID();
-      const decoded = this.jwtService.decode(refreshToken) as { exp?: number } | null;
-
-      if (!decoded?.exp || !Number.isFinite(decoded.exp)) {
-        throw new UnauthorizedException('Lỗi khởi tạo phiên đăng nhập!');
-      }
-
-      const expiresAt = new Date(decoded.exp * 1000);
-
-      const session = this.userSessionRepository.create({
-        userId: user.userId,
-        refreshTokenHash,
-        tokenFamily,
-        deviceName: deviceName || null,
-        expiresAt,
-      });
-
-      await this.userSessionRepository.save(session);
-
-      return {
-        message: 'Đăng nhập thành công!',
-        userId: user.userId,
-        fullName: user.fullName,
-        phoneNumber: user.phoneNumber,
-        role: user.role,
-        tokenVersion: user.tokenVersion,
-        mustChangePassword: user.mustChangePassword,
-        accessToken,
-        refreshToken,
-      };
     }
 
     return {
       message: 'Xác thực OTP thành công!',
-      phoneNumber: verifyOtpDto.phoneNumber,
+      ...(email !== undefined ? { email: normalizeEmail(email) } : { phoneNumber: verifyOtpDto.phoneNumber }),
       isValid: true,
     };
   }
@@ -277,6 +295,7 @@ export class AuthService {
   async register(
     registerDto: RegisterDto,
     _deviceName?: string | null,
+    actorId?: string,
   ): Promise<{
     message: string;
     userId: string;
@@ -285,6 +304,11 @@ export class AuthService {
     email: string | null;
     role: Role;
   }> {
+    if (actorId) {
+      await this.userService.assertManagementAuthority(actorId, undefined, registerDto.role);
+    } else if (registerDto.role === Role.ADMIN) {
+      throw new ForbiddenException('Thiếu quyền cấp tài khoản ADMIN!');
+    }
     const normalizedPhone = normalizePhone(registerDto.phoneNumber);
     if (!normalizedPhone) {
       throw new BadRequestException('Số điện thoại không hợp lệ!');
@@ -334,7 +358,7 @@ export class AuthService {
           normalizedPhone,
           plainPassword,
         );
-      } catch (error) {
+      } catch {
         throw new InternalServerErrorException(
           'Không thể gửi email mật khẩu khởi tạo. Vui lòng thử lại sau!',
         );
@@ -354,93 +378,88 @@ export class AuthService {
 
   //Hàm đăng nhập
   async login(loginDto: LoginDto, deviceName?: string | null) {
+    const lockout = this.loginLockoutService;
+    if (!lockout) {
+      throw new InternalServerErrorException('Dịch vụ xác thực tạm thời không khả dụng.');
+    }
     const user = await this.userService.findByPhoneNumber(
       loginDto.phoneNumber,
       true,
     );
+    // Unknown identifiers get a bounded anonymous counter, so the response and
+    // bcrypt timing remain indistinguishable from a known account.
+    const lockoutId = user?.userId ?? `unknown:${crypto.createHash('sha256')
+      .update(normalizePhone(loginDto.phoneNumber)).digest('hex')}`;
+    const state = await lockout.getState(lockoutId);
+    if (user && state.pendingManual && !user.isLocked) {
+      await lockout.withUserLock(user.userId, async (current, manager) => {
+        if (current) await lockout.persistManualLock(manager, current);
+        return undefined;
+      });
+      throw new UnauthorizedException('Số điện thoại hoặc mật khẩu không đúng!');
+    }
+    if (user) {
+      lockout.assertNotLocked(user, state);
+    } else if (state.tempTtl > 0) {
+      // Preserve the cooldown response for an anonymous identifier without
+      // passing a fabricated User object to the authorization guard.
+      lockout.assertNotLocked({ isActive: true } as User, state);
+    }
 
-    const hashToCompare = user?.passwordHash || DUMMY_HASH;
     const isPasswordValid = await bcrypt.compare(
       loginDto.password,
-      hashToCompare,
+      user?.passwordHash || DUMMY_HASH,
     );
-
-    if (!user || !isPasswordValid) {
-      throw new UnauthorizedException(
-        'Số điện thoại hoặc mật khẩu không đúng!',
-      );
+    if (!user || !user.isActive || !isPasswordValid) {
+      const failure = await lockout.recordFailure(lockoutId, Boolean(user));
+      if (user && failure.pendingManual) {
+        await lockout.withUserLock(user.userId, async (current, manager) => {
+          if (current) await lockout.persistManualLock(manager, current);
+          return undefined;
+        });
+      }
+      if (failure.tempTtl > 0) lockout.assertNotLocked(user, failure);
+      throw new UnauthorizedException('Số điện thoại hoặc mật khẩu không đúng!');
     }
 
-    if (!user.isActive) {
-      throw new UnauthorizedException(
-        'Tài khoản của bạn đã bị khóa hoặc ngừng hoạt động. Vui lòng liên hệ quản trị viên!',
-      );
-    }
+    return lockout.withUserLock(user.userId, async (current, manager, afterCommit) => {
+      const currentState = await lockout.getState(user.userId);
+      lockout.assertNotLocked(current, currentState);
+      const passwordValid = await bcrypt.compare(loginDto.password, current!.passwordHash);
+      if (!passwordValid) {
+        const failure = await lockout.recordFailure(current!.userId);
+        if (failure.pendingManual) await lockout.persistManualLock(manager, current!);
+        if (failure.tempTtl > 0) lockout.assertNotLocked(current, failure);
+        throw new UnauthorizedException('Số điện thoại hoặc mật khẩu không đúng!');
+      }
 
-    const accessPayload = {
-      sub: user.userId,
-      phoneNumber: user.phoneNumber,
-      tokenVersion: user.tokenVersion,
-      role: user.role,
-      type: 'access',
-    };
-
-    const refreshPayload = {
-      sub: user.userId,
-      tokenVersion: user.tokenVersion,
-      role: user.role,
-      type: 'refresh',
-    };
-    const accessToken = await this.jwtService.signAsync(accessPayload, {
-      jwtid: crypto.randomUUID(),
+      const accessToken = await this.jwtService.signAsync({
+        sub: current!.userId, phoneNumber: current!.phoneNumber, tokenVersion: current!.tokenVersion,
+        role: current!.role, type: 'access',
+      }, { jwtid: crypto.randomUUID() });
+      const refreshToken = await this.jwtService.signAsync({
+        sub: current!.userId, tokenVersion: current!.tokenVersion, role: current!.role, type: 'refresh',
+      }, {
+        secret: this.configService.get<string>('JWT_REFRESH_SECRET'), algorithm: 'HS256',
+        expiresIn: (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d') as any,
+        jwtid: crypto.randomUUID(),
+      });
+      const decoded = this.jwtService.decode(refreshToken) as { exp?: number } | null;
+      if (!decoded?.exp || !Number.isFinite(decoded.exp)) throw new UnauthorizedException('Refresh token không hợp lệ!');
+      const session = manager.create(UserSession, {
+        userId: current!.userId,
+        refreshTokenHash: crypto.createHash('sha256').update(refreshToken).digest('hex'),
+        tokenFamily: crypto.randomUUID(), deviceName: deviceName || null,
+        expiresAt: new Date(decoded.exp * 1000),
+      });
+      await manager.save(UserSession, session);
+      afterCommit(() => lockout.resetLoginFailureState(current!.userId, 'PASSWORD_LOGIN'));
+      return {
+        userId: current!.userId, fullName: current!.fullName, phoneNumber: current!.phoneNumber,
+        role: current!.role, tokenVersion: current!.tokenVersion,
+        mustChangePassword: current!.mustChangePassword, accessToken, refreshToken,
+      };
     });
-
-    const refreshToken = await this.jwtService.signAsync(refreshPayload, {
-      secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
-      algorithm: 'HS256',
-      expiresIn: (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ||
-        '7d') as any,
-      jwtid: crypto.randomUUID(),
-    });
-
-    // Tạo server-side session cho Refresh Token (Phase 3)
-    const refreshTokenHash = crypto
-      .createHash('sha256')
-      .update(refreshToken)
-      .digest('hex');
-
-    const tokenFamily = crypto.randomUUID();
-
-    const decoded = this.jwtService.decode(refreshToken) as {
-      exp?: number;
-    } | null;
-
-    if (!decoded?.exp || !Number.isFinite(decoded.exp)) {
-      throw new UnauthorizedException('Refresh token không hợp lệ!');
-    }
-
-    const expiresAt = new Date(decoded.exp * 1000);
-
-    const session = this.userSessionRepository.create({
-      userId: user.userId,
-      refreshTokenHash,
-      tokenFamily,
-      deviceName: deviceName || null,
-      expiresAt,
-    });
-
-    await this.userSessionRepository.save(session);
-
-    return {
-      userId: user.userId,
-      fullName: user.fullName,
-      phoneNumber: user.phoneNumber,
-      role: user.role,
-      tokenVersion: user.tokenVersion,
-      mustChangePassword: user.mustChangePassword,
-      accessToken,
-      refreshToken,
-    };
   }
 
   //Hàm làm mới token (Refresh Token Rotation - Phase 4)
@@ -455,7 +474,10 @@ export class AuthService {
       }
       const user = await this.userService.findById(payload.sub);
 
-      if (!user || !user.isActive) {
+      const lockout = this.loginLockoutService;
+      if (!lockout) throw new InternalServerErrorException('Dịch vụ xác thực tạm thời không khả dụng.');
+      const state = await lockout.getState(payload.sub);
+      if (!user || !user.isActive || user.isLocked || state.pendingManual) {
         throw new UnauthorizedException('Refresh token không hợp lệ!');
       }
 
@@ -492,7 +514,7 @@ export class AuthService {
         throw new UnauthorizedException('Refresh token không hợp lệ!');
       }
 
-      return await this.dataSource.transaction(async (manager) => {
+      const rotation = await this.dataSource.transaction(async (manager) => {
         const session = await manager.findOne(UserSession, {
           where: { refreshTokenHash },
           lock: { mode: 'pessimistic_write' },
@@ -516,7 +538,9 @@ export class AuthService {
               revokeReason: 'REUSE_DETECTED',
             },
           );
-          throw new UnauthorizedException('Refresh token không hợp lệ!');
+          // Return a sentinel so TypeORM commits the family revocation before
+          // the generic client rejection is raised outside this transaction.
+          return { reuseDetected: true as const };
         }
 
         if (session.expiresAt && session.expiresAt.getTime() <= Date.now()) {
@@ -595,6 +619,10 @@ export class AuthService {
           refreshToken: newRefreshToken,
         };
       });
+      if ('reuseDetected' in rotation) {
+        throw new UnauthorizedException('Refresh token không hợp lệ!');
+      }
+      return rotation;
     } catch (error) {
       if (error instanceof UnauthorizedException) {
         throw error;
@@ -605,28 +633,18 @@ export class AuthService {
 
   // Hàm đặt lại mật khẩu bằng OTP (Phase 7 - Change Password & Revoke All Sessions)
   async resetPassword(resetPasswordDto: ResetPasswordDto) {
-    const user = await this.userService.findByPhoneNumber(
-      resetPasswordDto.phoneNumber,
-    );
+    const email = resetPasswordDto.email;
+    const identifier = email !== undefined ? getEmailOtpIdentifier(email) : resetPasswordDto.phoneNumber;
+    const user = email !== undefined
+      ? await this.userService.findByNormalizedEmail(normalizeEmail(email))
+      : await this.userService.findByPhoneNumber(resetPasswordDto.phoneNumber);
 
     if (!user || !user.isActive) {
-      throw new UnauthorizedException('Không tìm thấy người dùng!');
+      throw new UnauthorizedException('Chưa xác thực OTP hoặc phiên xác thực đã hết hạn!');
     }
 
-    let isValid = false;
-    if (this.otpService) {
-      isValid = await this.otpService.consumePhoneVerified(
-        OtpPurpose.RESET_PASSWORD,
-        resetPasswordDto.phoneNumber,
-      );
-    } else {
-      isValid = true;
-    }
-
-    if (!isValid) {
-      throw new UnauthorizedException(
-        'Chưa xác thực OTP hoặc phiên xác thực đã hết hạn!',
-      );
+    if (!this.otpService) {
+      throw new InternalServerErrorException('Dịch vụ OTP chưa sẵn sàng!');
     }
 
     const newPasswordHash = await bcrypt.hash(
@@ -634,22 +652,29 @@ export class AuthService {
       10,
     );
 
-    return await this.dataSource.transaction(async (manager) => {
+    const lockout = this.loginLockoutService;
+    if (!lockout) throw new InternalServerErrorException('Dịch vụ xác thực tạm thời không khả dụng.');
+    return lockout.withUserLock(user.userId, async (current, manager, afterCommit) => {
+      if (!current || !current.isActive) throw new UnauthorizedException('Chưa xác thực OTP hoặc phiên xác thực đã hết hạn!');
+      const isValid = await this.otpService!.consumePhoneVerified(OtpPurpose.RESET_PASSWORD, identifier);
+      if (!isValid) {
+        throw new UnauthorizedException('Chưa xác thực OTP hoặc phiên xác thực đã hết hạn!');
+      }
       // 1. Đổi mật khẩu
       await this.userService.updatePassword(
-        user.userId,
+        current.userId,
         newPasswordHash,
         manager,
       );
 
       // 2. Tăng tokenVersion để vô hiệu hoá tất cả token cũ
-      await this.userService.incrementTokenVersion(user.userId, manager);
+      await this.userService.incrementTokenVersion(current.userId, manager);
 
       // 3. Revoke toàn bộ session cũ
       await manager.update(
         UserSession,
         {
-          userId: user.userId,
+          userId: current.userId,
           revokedAt: IsNull(),
         },
         {
@@ -658,6 +683,7 @@ export class AuthService {
         },
       );
 
+      afterCommit(() => lockout.resetLoginFailureState(current.userId, 'PASSWORD_RESET'));
       return {
         message: 'Đặt lại mật khẩu thành công. Vui lòng đăng nhập bằng mật khẩu mới.',
       };
@@ -667,8 +693,10 @@ export class AuthService {
   // Hàm thay đổi mật khẩu (Phase 7 - Change Password & Revoke All Sessions)
   async changePassword(userId: string, changePasswordDto: ChangePasswordDto) {
     const user = await this.userService.findById(userId, true);
-
-    if (!user || !user.isActive) {
+    const lockout = this.loginLockoutService;
+    if (!lockout) throw new InternalServerErrorException('Dịch vụ xác thực tạm thời không khả dụng.');
+    const state = await lockout.getState(userId);
+    if (!user || !user.isActive || user.isLocked || state.pendingManual) {
       throw new UnauthorizedException('Không tìm thấy người dùng!');
     }
 
@@ -688,12 +716,7 @@ export class AuthService {
         changePasswordDto.otp,
       );
     } else {
-      const MOCK_OTP = '123456';
-      if (changePasswordDto.otp !== MOCK_OTP) {
-        throw new BadRequestException(
-          'Mã OTP không chính xác hoặc đã hết hạn!',
-        );
-      }
+      throw new InternalServerErrorException('Dịch vụ OTP chưa sẵn sàng!');
     }
 
     const refreshToken = changePasswordDto.refreshToken;
@@ -732,16 +755,22 @@ export class AuthService {
       10,
     );
 
-    return await this.dataSource.transaction(async (manager) => {
+    return lockout.withUserLock(userId, async (current, manager, afterCommit) => {
+      const currentState = await lockout.getState(userId);
+      // Password change may recover a temporary cooldown, but never a manual lock.
+      lockout.assertNotLocked(current, currentState, false);
+      if (!current || !await bcrypt.compare(changePasswordDto.currentPassword, current.passwordHash)) {
+        throw new UnauthorizedException('Mật khẩu hiện tại không đúng!');
+      }
       const tokenFamily = currentSession?.tokenFamily || crypto.randomUUID();
       const deviceName = currentSession?.deviceName || null;
 
       // 2. Đổi mật khẩu
-      await this.userService.updatePassword(userId, newPasswordHash, manager);
+      await this.userService.updatePassword(current.userId, newPasswordHash, manager);
 
       // 3. Tăng tokenVersion và lấy version mới
       const newTokenVersion = await this.userService.incrementTokenVersion(
-        userId,
+        current.userId,
         manager,
       );
 
@@ -749,7 +778,7 @@ export class AuthService {
       await manager.update(
         UserSession,
         {
-          userId,
+          userId: current.userId,
           revokedAt: IsNull(),
         },
         {
@@ -761,10 +790,10 @@ export class AuthService {
       // 5. Tạo Access Token mới cho thiết bị hiện tại
       const newAccessToken = await this.jwtService.signAsync(
         {
-          sub: userId,
-          phoneNumber: user.phoneNumber,
+          sub: current.userId,
+          phoneNumber: current.phoneNumber,
           tokenVersion: newTokenVersion,
-          role: user.role,
+          role: current.role,
           type: 'access',
         },
         {
@@ -775,9 +804,9 @@ export class AuthService {
       // 6. Tạo Refresh Token mới cho thiết bị hiện tại
       const newRefreshToken = await this.jwtService.signAsync(
         {
-          sub: userId,
+          sub: current.userId,
           tokenVersion: newTokenVersion,
-          role: user.role,
+          role: current.role,
           type: 'refresh',
         },
         {
@@ -809,7 +838,7 @@ export class AuthService {
 
       // 9. Tạo session mới cho thiết bị đang đổi mật khẩu
       const newSession = manager.create(UserSession, {
-        userId,
+        userId: current.userId,
         tokenFamily,
         refreshTokenHash: newRefreshTokenHash,
         deviceName,
@@ -819,9 +848,10 @@ export class AuthService {
       await manager.save(UserSession, newSession);
 
       // 10. Trả token mới cho thiết bị hiện tại
+      afterCommit(() => lockout.resetLoginFailureState(current.userId, 'PASSWORD_CHANGE'));
       return {
         message: 'Thay đổi mật khẩu thành công!',
-        userId,
+        userId: current.userId,
         tokenVersion: newTokenVersion,
         mustChangePassword: false,
         accessToken: newAccessToken,

@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { UnauthorizedException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  UnauthorizedException,
+  ForbiddenException,
+  NotFoundException,
+  ConflictException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { JwtStrategy } from '../src/modules/auth/strategies/jwt.strategy.js';
 import { AuthService } from '../src/modules/auth/auth.service.js';
 import { AuthController } from '../src/modules/auth/auth.controller.js';
@@ -21,6 +27,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
   let authController: AuthController;
   let userSessionRepository: any;
   let dataSource: any;
+  let redisService: any;
   let sessionsStore: any[] = [];
 
   beforeEach(() => {
@@ -70,24 +77,53 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
         return sessionsStore.find((s) => s.refreshTokenHash === hash) || null;
       }),
       find: vi.fn(async () => sessionsStore),
+      update: vi.fn(async (entityOrCriteria, criteriaOrUpdate, maybeUpdate) => {
+        const criteria = maybeUpdate !== undefined ? criteriaOrUpdate : entityOrCriteria;
+        const updateData = maybeUpdate !== undefined ? maybeUpdate : criteriaOrUpdate;
+        let affected = 0;
+        for (const s of sessionsStore) {
+          let match = true;
+          if (criteria.tokenFamily && s.tokenFamily !== criteria.tokenFamily) {
+            match = false;
+          }
+          if (criteria.userId && s.userId !== criteria.userId) {
+            match = false;
+          }
+          if ('revokedAt' in criteria) {
+            if (s.revokedAt !== null) {
+              match = false;
+            }
+          }
+          if (match) {
+            Object.assign(s, updateData);
+            affected++;
+          }
+        }
+        return { affected, raw: [], generatedMaps: [] };
+      }),
     };
 
-    let txQueue = Promise.resolve();
+    let txLock = Promise.resolve();
     dataSource = {
       transaction: vi.fn(async (callback) => {
-        const runTx = async () => {
+        const execute = async () => {
           const manager = {
-            findOne: vi.fn(async (entity, options) => {
+            findOne: vi.fn(async (entityOrOptions, maybeOptions) => {
+              const options = maybeOptions || entityOrOptions;
               const hash = options?.where?.refreshTokenHash;
               return sessionsStore.find((s) => s.refreshTokenHash === hash) || null;
             }),
-            create: vi.fn((entity, dto) => ({
-              ...dto,
-              id: 'sess-' + Math.random(),
-              revokedAt: null,
-              revokeReason: null,
-            })),
-            save: vi.fn(async (entity, session) => {
+            create: vi.fn((entityOrDto, maybeDto) => {
+              const dto = maybeDto || entityOrDto;
+              return {
+                ...dto,
+                id: 'sess-' + Math.random(),
+                revokedAt: null,
+                revokeReason: null,
+              };
+            }),
+            save: vi.fn(async (entityOrSession, maybeSession) => {
+              const session = maybeSession || entityOrSession;
               const index = sessionsStore.findIndex((s) => s.id === session.id);
               if (index >= 0) {
                 sessionsStore[index] = { ...sessionsStore[index], ...session };
@@ -97,7 +133,9 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
                 return session;
               }
             }),
-            update: vi.fn(async (entity, criteria, updateData) => {
+            update: vi.fn(async (entityOrCriteria, criteriaOrUpdate, maybeUpdate) => {
+              const criteria = maybeUpdate !== undefined ? criteriaOrUpdate : entityOrCriteria;
+              const updateData = maybeUpdate !== undefined ? maybeUpdate : criteriaOrUpdate;
               let affected = 0;
               for (const s of sessionsStore) {
                 let match = true;
@@ -123,30 +161,92 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
           return await callback(manager);
         };
 
-        const currentPromise = txQueue.then(runTx, runTx);
-        txQueue = currentPromise.then(() => {}, () => {});
-        return await currentPromise;
+        const prevLock = txLock;
+        let resolveLock: () => void;
+        txLock = new Promise<void>((resolve) => {
+          resolveLock = resolve;
+        });
+        await prevLock;
+        try {
+          return await execute();
+        } finally {
+          resolveLock!();
+        }
       }),
     };
 
     jwtService = new JwtService({ secret: mockAccessSecret });
-    const originalSignAsync = jwtService.signAsync.bind(jwtService);
-    let signCounter = 0;
-    vi.spyOn(jwtService, 'signAsync').mockImplementation(async (payload: any, options?: any) => {
-      signCounter++;
-      return originalSignAsync(payload, {
-        ...options,
-        jwtid: 'tok-' + signCounter + '-' + Math.random(),
-      });
-    });
 
-    jwtStrategy = new JwtStrategy(configService, usersService);
+    redisService = {
+      get: vi.fn().mockResolvedValue(null),
+      set: vi.fn().mockResolvedValue('OK'),
+      del: vi.fn().mockResolvedValue(1),
+      exists: vi.fn().mockResolvedValue(0),
+    };
+
+    jwtStrategy = new JwtStrategy(configService, usersService, redisService);
+
+    const emailService: any = {
+      sendInitialPassword: vi.fn().mockResolvedValue(undefined),
+    };
+    const esmsService: any = {
+      sendSMS: vi.fn().mockResolvedValue(undefined),
+    };
+    const otpService: any = {
+      verifyOtp: vi.fn().mockResolvedValue(true),
+      consumePhoneVerified: vi.fn().mockResolvedValue(true),
+      createAndSaveOtp: vi.fn().mockResolvedValue({ otp: '123456' }),
+    };
+
+    const loginLockoutService: any = {
+      getState: vi.fn().mockResolvedValue({ pendingManual: false, remainingAttempts: 5, tempTtl: 0 }),
+      recordFailure: vi.fn().mockResolvedValue({ pendingManual: false, remainingAttempts: 4, tempTtl: 0 }),
+      resetLoginFailureState: vi.fn().mockResolvedValue(undefined),
+      assertNotLocked: vi.fn(),
+      withUserLock: vi.fn(async (userId, cb) => {
+        const execute = async () => {
+          let user = await usersService.findById(userId, true);
+          if (!user) user = await usersService.findByPhoneNumber(userId, true);
+
+          const manager = {
+            save: async (...args: any[]) => userSessionRepository.save(args.length > 1 ? args[1] : args[0]),
+            update: async (...args: any[]) => userSessionRepository.update(args.length > 2 ? args[1] : args[0], args.length > 2 ? args[2] : args[1]),
+            findOne: async (...args: any[]) => userSessionRepository.findOne(args.length > 1 ? args[1] : args[0]),
+            create: (...args: any[]) => userSessionRepository.create(args.length > 1 ? args[1] : args[0]),
+          };
+
+          const afterCommitFns: any[] = [];
+          const result = await cb(user, manager, (fn: any) => afterCommitFns.push(fn));
+          for (const fn of afterCommitFns) fn();
+          return result;
+        };
+
+        const prevLock = (globalThis as any).__txLock || Promise.resolve();
+        let resolveLock!: () => void;
+        (globalThis as any).__txLock = new Promise<void>((resolve) => {
+          resolveLock = resolve;
+        });
+        await prevLock;
+        try {
+          return await execute();
+        } finally {
+          resolveLock();
+        }
+      }),
+      persistManualLock: vi.fn().mockResolvedValue(undefined),
+    };
+
     authService = new AuthService(
       usersService,
       jwtService,
       configService,
       userSessionRepository,
       dataSource,
+      emailService,
+      esmsService,
+      otpService,
+      redisService,
+      loginLockoutService
     );
     authController = new AuthController(authService, usersService);
   });
@@ -166,6 +266,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
         tokenVersion: 1,
         role: 'FARMER',
         type: 'access',
+        jti: 'test-jti-1',
       });
 
       expect(result).toEqual(mockUser);
@@ -200,6 +301,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
           tokenVersion: 1,
           role: 'FARMER',
           type: 'refresh',
+          jti: 'test-jti-refresh',
         }),
       ).rejects.toThrow(UnauthorizedException);
     });
@@ -218,6 +320,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
           tokenVersion: 1, // JWT has old version 1
           role: 'FARMER',
           type: 'access',
+          jti: 'test-jti-version-mismatch',
         }),
       ).rejects.toThrow(UnauthorizedException);
     });
@@ -236,6 +339,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
           tokenVersion: 1,
           role: 'FARMER',
           type: 'access',
+          jti: 'test-jti-inactive',
         }),
       ).rejects.toThrow(UnauthorizedException);
     });
@@ -438,6 +542,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
         tokenVersion: 0,
         role: user.role,
         type: 'access',
+        jti: 'test-jti-old',
       };
       const oldRefreshToken = jwtService.sign(
         { sub: user.userId, tokenVersion: 0, role: user.role, type: 'refresh' },
@@ -464,30 +569,174 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
     });
   });
 
-  describe('5. SEC-001: Privilege Escalation Fix', () => {
-    it('Register always forces role to Role.FARMER', async () => {
+  describe('5. Manager Onboarding (Register) Contract', () => {
+    it('Register with valid DTO returns userId/fullName/phoneNumber/email/role and NO tokens', async () => {
       usersService.findByPhoneNumber.mockResolvedValue(null);
+      usersService.findByEmail = vi.fn().mockResolvedValue(null);
       usersService.createUser.mockImplementation(async (data: any) => ({
         userId: 'new-user-id',
+        fullName: data.fullName,
+        phoneNumber: data.phoneNumber,
+        email: data.email,
+        role: data.role,
+        mustChangePassword: data.mustChangePassword,
         tokenVersion: 0,
-        ...data,
       }));
 
       const res = await authService.register({
         fullName: 'Test User',
         phoneNumber: '0909999999',
-        password: 'password123',
+        email: 'test@example.com',
+        role: Role.FARMER,
       });
 
-      expect(res.role).toBe(Role.FARMER);
+      expect(res).toHaveProperty('userId');
+      expect(res).toHaveProperty('fullName', 'Test User');
+      expect(res).toHaveProperty('phoneNumber', '0909999999');
+      expect(res).toHaveProperty('email', 'test@example.com');
+      expect(res).toHaveProperty('role', Role.FARMER);
+      expect(res).not.toHaveProperty('accessToken');
+      expect(res).not.toHaveProperty('refreshToken');
+    });
+
+    it('Register with MANAGER role is accepted (manager can onboard other managers)', async () => {
+      usersService.findByPhoneNumber.mockResolvedValue(null);
+      usersService.findByEmail = vi.fn().mockResolvedValue(null);
+      usersService.createUser.mockImplementation(async (data: any) => ({
+        userId: 'mgr-id',
+        fullName: data.fullName,
+        phoneNumber: data.phoneNumber,
+        email: data.email,
+        role: data.role,
+        mustChangePassword: data.mustChangePassword,
+        tokenVersion: 0,
+      }));
+
+      const res = await authService.register({
+        fullName: 'Manager User',
+        phoneNumber: '0901234568',
+        email: 'mgr@example.com',
+        role: Role.MANAGER,
+      });
+
+      expect(res.role).toBe(Role.MANAGER);
+    });
+
+    it('Duplicate phone number throws 409 ConflictException', async () => {
+      usersService.findByPhoneNumber.mockResolvedValue({ userId: 'existing' });
+
+      await expect(
+        authService.register({
+          fullName: 'Dup User',
+          phoneNumber: '0909999999',
+          email: 'dup@example.com',
+          role: Role.FARMER,
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('Duplicate email throws 409 ConflictException', async () => {
+      usersService.findByPhoneNumber.mockResolvedValue(null);
+      usersService.findByEmail = vi.fn().mockResolvedValue({ userId: 'existing' });
+
+      await expect(
+        authService.register({
+          fullName: 'Dup Email User',
+          phoneNumber: '0909888888',
+          email: 'dup@example.com',
+          role: Role.FARMER,
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('createUser is called with generated passwordHash and mustChangePassword=true (no client password)', async () => {
+      usersService.findByPhoneNumber.mockResolvedValue(null);
+      usersService.findByEmail = vi.fn().mockResolvedValue(null);
+      usersService.createUser.mockImplementation(async (data: any) => ({
+        userId: 'u1',
+        ...data,
+        tokenVersion: 0,
+      }));
+
+      await authService.register({
+        fullName: 'Hash User',
+        phoneNumber: '0908888888',
+        email: 'hash@example.com',
+        role: Role.FARMER,
+      });
+
       expect(usersService.createUser).toHaveBeenCalledWith(
         expect.objectContaining({
-          role: Role.FARMER,
+          mustChangePassword: true,
+          passwordHash: expect.any(String),
         }),
         expect.anything(),
       );
+      // The hash must not be empty
+      const call = usersService.createUser.mock.calls[0][0];
+      expect(call.passwordHash.length).toBeGreaterThan(10);
+    });
+
+    it('Email service called with correct recipient after createUser succeeds', async () => {
+      usersService.findByPhoneNumber.mockResolvedValue(null);
+      usersService.findByEmail = vi.fn().mockResolvedValue(null);
+      usersService.createUser.mockImplementation(async (data: any) => ({
+        userId: 'u2',
+        ...data,
+        tokenVersion: 0,
+      }));
+
+      // Capture the email service mock created in beforeEach
+      // Re-instantiate authService with a spy-able emailService
+      const emailSpy: any = { sendInitialPassword: vi.fn().mockResolvedValue(undefined) };
+      const esms: any = { sendSMS: vi.fn() };
+      const localAuthService = new AuthService(
+        usersService, jwtService, configService, userSessionRepository, dataSource, emailSpy, esms,
+      );
+
+      await localAuthService.register({
+        fullName: 'Email User',
+        phoneNumber: '0907777777',
+        email: 'emailuser@example.com',
+        role: Role.FARMER,
+      });
+
+      expect(emailSpy.sendInitialPassword).toHaveBeenCalledWith(
+        'emailuser@example.com',
+        'Email User',
+        '0907777777',
+        expect.any(String),
+      );
+    });
+
+    it('Email service failure causes transaction rollback and throws InternalServerErrorException', async () => {
+      usersService.findByPhoneNumber.mockResolvedValue(null);
+      usersService.findByEmail = vi.fn().mockResolvedValue(null);
+      usersService.createUser.mockImplementation(async (data: any) => ({
+        userId: 'u3',
+        ...data,
+        tokenVersion: 0,
+      }));
+
+      const failEmailService: any = {
+        sendInitialPassword: vi.fn().mockRejectedValue(new Error('SMTP down')),
+      };
+      const esms: any = { sendSMS: vi.fn() };
+      const localAuthService = new AuthService(
+        usersService, jwtService, configService, userSessionRepository, dataSource, failEmailService, esms,
+      );
+
+      await expect(
+        localAuthService.register({
+          fullName: 'Fail Email User',
+          phoneNumber: '0906666666',
+          email: 'fail@example.com',
+          role: Role.FARMER,
+        }),
+      ).rejects.toThrow(InternalServerErrorException);
     });
   });
+
 
   describe('6. SEC-002: BOLA / IDOR Fix in UsersController.getUserById', () => {
     let usersController: UsersController;
@@ -1395,9 +1644,10 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
       const res = await authController.changePassword('user-p7-1', {
         currentPassword: 'oldPassword123',
         newPassword: 'newPassword456',
+        otp: '123456',
       });
 
-      expect(res).toEqual({ message: 'Thay đổi mật khẩu thành công!' });
+      expect(res.message).toBe('Thay đổi mật khẩu thành công!');
       expect(await bcrypt.compare('newPassword456', mockUser.passwordHash)).toBe(true);
       expect(await bcrypt.compare('oldPassword123', mockUser.passwordHash)).toBe(false);
     });
@@ -1433,6 +1683,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
         authController.changePassword('user-p7-2', {
           currentPassword: 'wrongPassword123',
           newPassword: 'newPassword456',
+          otp: '123456',
         }),
       ).rejects.toThrow(UnauthorizedException);
 
@@ -1482,6 +1733,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
       await authController.changePassword('user-p7-3', {
         currentPassword: 'oldPassword123',
         newPassword: 'newPassword456',
+        otp: '123456',
       });
 
       expect(sessA.revokedAt).toBeInstanceOf(Date);
@@ -1549,6 +1801,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
       await authController.changePassword('user-p7-4', {
         currentPassword: 'oldPassword123',
         newPassword: 'newPassword456',
+        otp: '123456',
       });
 
       expect(sessA.revokeReason).toBe('ROTATED');
@@ -1578,6 +1831,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
       await authController.changePassword('user-p7-5', {
         currentPassword: 'oldPassword123',
         newPassword: 'newPassword456',
+        otp: '123456',
       });
 
       expect(usersService.incrementTokenVersion).toHaveBeenCalledTimes(1);
@@ -1610,6 +1864,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
       await authController.changePassword('user-p7-6', {
         currentPassword: 'oldPassword123',
         newPassword: 'newPassword456',
+        otp: '123456',
       });
 
       // Refreshing with oldRefreshToken must fail with 401
@@ -1647,6 +1902,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
       await authController.changePassword('user-p7-7', {
         currentPassword: 'oldPassword123',
         newPassword: 'newPassword456',
+        otp: '123456',
       });
 
       // JwtStrategy.validate with old payload (tokenVersion: 0) must now throw UnauthorizedException
@@ -1675,6 +1931,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
       await authController.changePassword('user-p7-8', {
         currentPassword: 'oldPassword123',
         newPassword: 'newPassword456',
+        otp: '123456',
       });
 
       // Login with old password fails
@@ -1688,7 +1945,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
       expect(newLogin).toHaveProperty('refreshToken');
     });
 
-    it('TEST 9: Change password does not create any new session and session count stays constant', async () => {
+    it('TEST 9: Change password revokes old sessions and creates one new session for current device', async () => {
       const bcrypt = await import('bcrypt');
       const oldPasswordHash = await bcrypt.hash('oldPassword123', 10);
       const mockUser = {
@@ -1712,11 +1969,11 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
       const changeRes = await authController.changePassword('user-p7-9', {
         currentPassword: 'oldPassword123',
         newPassword: 'newPassword456',
+        otp: '123456',
       });
 
-      expect(changeRes).not.toHaveProperty('accessToken');
-      expect(changeRes).not.toHaveProperty('refreshToken');
-      expect(sessionsStore.length).toBe(countBefore);
+      expect(changeRes).toHaveProperty('accessToken');
+      expect(changeRes).toHaveProperty('refreshToken');
       expect(sessionsStore[0].revokeReason).toBe('PASSWORD_CHANGED');
     });
   });

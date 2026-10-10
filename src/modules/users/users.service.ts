@@ -1,23 +1,101 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from './entities/user.entity.js';
-import { EntityManager, FindOptionsWhere, ILike, Repository } from 'typeorm';
+import { EntityManager, FindOptionsWhere, ILike, Not, Repository } from 'typeorm';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { AdminUpdateUserDto } from './dto/admin-update-user.dto.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
 import { FindUsersQueryDto } from './dto/find-users-query.dto.js';
 import * as bcrypt from 'bcrypt';
+import { Role } from '../../common/enums/role.enum.js';
+import { LoginLockoutService } from '../../common/redis/login-lockout.service.js';
 
 @Injectable()
 export class UsersService {
   constructor(
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+    @Optional()
+    private readonly loginLockoutService?: LoginLockoutService,
   ) {}
+
+  async assertManagementAuthority(actorId: string, targetId?: string, requestedRole?: Role): Promise<Role> {
+    if (!actorId || !this.loginLockoutService) {
+      throw new ForbiddenException('Không có quyền thực hiện thao tác quản trị!');
+    }
+    const actor = await this.findById(actorId);
+    if (!actor || !actor.isActive || actor.isLocked ||
+        (actor.role !== Role.ADMIN && actor.role !== Role.MANAGER) ||
+        (await this.loginLockoutService.getState(actor.userId)).pendingManual) {
+      throw new ForbiddenException('Không có quyền thực hiện thao tác quản trị!');
+    }
+    if (actor.role === Role.MANAGER) {
+      if (requestedRole === Role.ADMIN) {
+        throw new ForbiddenException('MANAGER không được cấp quyền ADMIN!');
+      }
+      if (targetId) {
+        const target = await this.findById(targetId);
+        if (target?.role === Role.ADMIN) {
+          throw new ForbiddenException('MANAGER không được thay đổi tài khoản ADMIN!');
+        }
+      }
+    }
+    return actor.role;
+  }
+
+  async unlockUser(
+    actorId: string,
+    targetId: string,
+    _reason: string,
+  ): Promise<{ message: string; userId: string }> {
+    actorId = actorId.toLowerCase();
+    targetId = targetId.toLowerCase();
+    if (actorId === targetId) {
+      throw new ForbiddenException('Không được tự mở khóa tài khoản của chính mình!');
+    }
+    if (!this.loginLockoutService) {
+      throw new InternalServerErrorException('Dịch vụ kiểm tra khóa chưa sẵn sàng!');
+    }
+    const lockout = this.loginLockoutService;
+    return lockout.withUsersLock(
+      [actorId, targetId],
+      async (users, manager, afterCommit) => {
+        const actor = users.get(actorId);
+        const target = users.get(targetId);
+        if (!actor || !actor.isActive || actor.isLocked) {
+          throw new ForbiddenException('Không có quyền mở khóa tài khoản này!');
+        }
+        const actorState = await lockout.getState(actorId);
+        if (actorState.pendingManual) {
+          throw new ForbiddenException('Không có quyền mở khóa tài khoản này!');
+        }
+        if (actor.role !== Role.ADMIN && actor.role !== Role.MANAGER) {
+          throw new ForbiddenException('Không có quyền mở khóa tài khoản này!');
+        }
+        if (!target) {
+          throw new NotFoundException('Không tìm thấy người dùng!');
+        }
+        if (actor.role === Role.MANAGER && target.role === Role.ADMIN) {
+          throw new ForbiddenException('MANAGER không được mở khóa ADMIN!');
+        }
+        if (target.isLocked) {
+          await manager.update(User, { userId: targetId }, {
+            isLocked: false,
+          });
+        }
+        // Sessions revoked on lock remain revoked; only a new login is permitted.
+        afterCommit(() => lockout.resetLoginFailureState(targetId, 'MANUAL_UNLOCK', true));
+        return { message: 'Mở khóa tài khoản thành công!', userId: targetId };
+      },
+    );
+  }
 
   // Loại bỏ passwordHash trước khi trả về client
   sanitizeUser(user: User): Omit<User, 'passwordHash'> {
@@ -51,6 +129,17 @@ export class UsersService {
         email,
       },
     });
+  }
+
+  // Lookup normalized recovery email without changing existing registration lookups.
+  async findByNormalizedEmail(email: string): Promise<User | null> {
+    const matches = await this.usersRepository
+      .createQueryBuilder('user')
+      .where('LOWER(TRIM(user.email)) = :email', { email: email.trim().toLowerCase() })
+      .take(2)
+      .getMany();
+    // Legacy case-sensitive unique constraints can contain ambiguous addresses.
+    return matches.length === 1 ? matches[0] : null;
   }
 
   // Tìm người dùng theo ID
@@ -182,7 +271,13 @@ export class UsersService {
   // Quản trị viên tạo người dùng mới
   async createUserByAdmin(
     dto: CreateUserDto,
+    actorId?: string,
   ): Promise<Omit<User, 'passwordHash'>> {
+    if (actorId) {
+      await this.assertManagementAuthority(actorId, undefined, dto.role);
+    } else if (dto.role === Role.ADMIN) {
+      throw new ForbiddenException('Thiếu quyền cấp tài khoản ADMIN!');
+    }
     const existing = await this.findByPhoneNumber(dto.phoneNumber);
     if (existing) {
       throw new ConflictException('Số điện thoại này đã được đăng ký!');
@@ -276,7 +371,24 @@ export class UsersService {
     }
 
     try {
-      const updatedUser = await this.usersRepository.save(user);
+      // Write only profile fields. A stale User entity must never overwrite a
+      // concurrent durable lock or tokenVersion increment.
+      const patch: Partial<User> = {};
+      for (const field of ['phoneNumber', 'fullName', 'email', 'gender', 'dateOfBirth'] as const) {
+        if (updateProfileDto[field] !== undefined) {
+          (patch as Record<string, unknown>)[field] = user[field];
+        }
+      }
+      if (Object.keys(patch).length > 0) {
+        const result = await this.usersRepository.update({ userId }, patch);
+        if (result.affected === 0) {
+          throw new NotFoundException('Không tìm thấy người dùng!');
+        }
+      }
+      const updatedUser = await this.findById(userId);
+      if (!updatedUser) {
+        throw new NotFoundException('Không tìm thấy người dùng!');
+      }
       return this.sanitizeUser(updatedUser);
     } catch (error: any) {
       if (error?.code === '23505') {
@@ -306,7 +418,14 @@ export class UsersService {
   async adminUpdateUser(
     userId: string,
     adminUpdateUserDto: AdminUpdateUserDto,
+    actorId?: string,
   ): Promise<Omit<User, 'passwordHash'>> {
+    const actorRole = actorId
+      ? await this.assertManagementAuthority(actorId, userId, adminUpdateUserDto.role)
+      : undefined;
+    if (!actorId && adminUpdateUserDto.role === Role.ADMIN) {
+      throw new ForbiddenException('Thiếu quyền cấp tài khoản ADMIN!');
+    }
     const user = await this.findById(userId);
     if (!user) {
       throw new NotFoundException('Không tìm thấy người dùng!');
@@ -379,12 +498,36 @@ export class UsersService {
       }
     }
 
-    if (shouldInvalidateTokens) {
-      user.tokenVersion = (user.tokenVersion || 0) + 1;
-    }
-
     try {
-      const savedUser = await this.usersRepository.save(user);
+      // UPDATE serializes with the User row locks held by login/unlock, and
+      // targets only requested fields so stale entities cannot reopen a lock.
+      const patch: Record<string, unknown> = {};
+      for (const field of ['phoneNumber', 'fullName', 'email', 'gender', 'dateOfBirth',
+        'mustChangePassword', 'role', 'isActive'] as const) {
+        if (adminUpdateUserDto[field] !== undefined) {
+          patch[field] = user[field];
+        }
+      }
+      if (shouldInvalidateTokens) {
+        patch.tokenVersion = () => '"token_version" + 1';
+      }
+      if (Object.keys(patch).length > 0) {
+        const result = await this.usersRepository.update(
+          actorRole === Role.MANAGER ? { userId, role: Not(Role.ADMIN) } : { userId },
+          patch,
+        );
+        if (result.affected === 0) {
+          const currentTarget = await this.findById(userId);
+          if (actorRole === Role.MANAGER && currentTarget?.role === Role.ADMIN) {
+            throw new ForbiddenException('MANAGER không được thay đổi tài khoản ADMIN!');
+          }
+          throw new NotFoundException('Không tìm thấy người dùng!');
+        }
+      }
+      const savedUser = await this.findById(userId);
+      if (!savedUser) {
+        throw new NotFoundException('Không tìm thấy người dùng!');
+      }
       return this.sanitizeUser(savedUser);
     } catch (error: any) {
       if (error?.code === '23505') {
@@ -397,13 +540,23 @@ export class UsersService {
   }
 
   // Quản trị viên xóa người dùng
-  async deleteUser(userId: string): Promise<{ message: string }> {
+  async deleteUser(userId: string, actorId: string): Promise<{ message: string }> {
+    const actorRole = await this.assertManagementAuthority(actorId, userId);
     const user = await this.findById(userId);
     if (!user) {
       throw new NotFoundException('Không tìm thấy người dùng!');
     }
 
-    await this.usersRepository.remove(user);
+    const result = await this.usersRepository.delete(
+      actorRole === Role.MANAGER ? { userId, role: Not(Role.ADMIN) } : { userId },
+    );
+    if (result.affected === 0) {
+      const currentTarget = await this.findById(userId);
+      if (actorRole === Role.MANAGER && currentTarget?.role === Role.ADMIN) {
+        throw new ForbiddenException('MANAGER không được xóa tài khoản ADMIN!');
+      }
+      throw new NotFoundException('Không tìm thấy người dùng!');
+    }
     return { message: 'Xóa người dùng thành công!' };
   }
 }
