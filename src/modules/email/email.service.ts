@@ -1,4 +1,4 @@
-﻿import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import nodemailer, { type Transporter } from 'nodemailer';
 
@@ -65,5 +65,94 @@ AquaSense`;
     });
 
     this.logger.log(`Gửi email thông tin tài khoản thành công tới: ${email}`);
+  }
+
+  /**
+   * Escape HTML special characters to prevent HTML/XSS injection in alert emails.
+   */
+  escapeHtml(str: string): string {
+    if (!str) return '';
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  async sendAlertEmail(
+    email: string,
+    recipientName: string,
+    alertDetails: {
+      alertId: string;
+      pondName?: string;
+      pondId?: string;
+      metricName: string;
+      triggeredValue: number;
+      alertLevel: string;
+      message?: string;
+    },
+  ): Promise<void> {
+    const safeName = this.escapeHtml(recipientName || 'Quý khách');
+    const safePond = this.escapeHtml(alertDetails.pondName || alertDetails.pondId || 'Ao nuôi');
+    const safeMetric = this.escapeHtml(alertDetails.metricName);
+    const safeValue = alertDetails.triggeredValue;
+    const safeLevel = this.escapeHtml(alertDetails.alertLevel);
+    const safeMessage = this.escapeHtml(alertDetails.message || '');
+
+    const subject = `[CẢNH BÁO ${safeLevel}] Sự cố tại ${safePond} - AquaSense`;
+    const text = `Xin chào ${recipientName},
+
+Hệ thống phát hiện cảnh báo mức độ ${alertDetails.alertLevel} tại ${alertDetails.pondName || alertDetails.pondId || 'ao nuôi'}:
+- Chỉ số: ${alertDetails.metricName}
+- Giá trị đo: ${alertDetails.triggeredValue}
+${alertDetails.message ? `- Chi tiết: ${alertDetails.message}` : ''}
+
+Vui lòng kiểm tra ao nuôi và thực hiện các biện pháp xử lý kịp thời.
+
+Trân trọng,
+AquaSense`;
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <h2 style="color: #d9534f;">CẢNH BÁO: ${safeLevel}</h2>
+        <p>Xin chào <strong>${safeName}</strong>,</p>
+        <p>Hệ thống giám sát ao nuôi vừa ghi nhận cảnh báo tại <strong>${safePond}</strong>:</p>
+        <table style="border-collapse: collapse; width: 100%; max-width: 500px; margin: 15px 0;">
+          <tr>
+            <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold; background: #f9f9f9;">Mức độ:</td>
+            <td style="padding: 8px; border: 1px solid #ddd; color: #d9534f; font-weight: bold;">${safeLevel}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold; background: #f9f9f9;">Chỉ số:</td>
+            <td style="padding: 8px; border: 1px solid #ddd;">${safeMetric}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold; background: #f9f9f9;">Giá trị đo:</td>
+            <td style="padding: 8px; border: 1px solid #ddd;">${safeValue}</td>
+          </tr>
+          ${safeMessage ? `
+          <tr>
+            <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold; background: #f9f9f9;">Thông điệp:</td>
+            <td style="padding: 8px; border: 1px solid #ddd;">${safeMessage}</td>
+          </tr>` : ''}
+        </table>
+        <p>Vui lòng đăng nhập hệ thống để kiểm tra chi tiết và thực hiện xử lý.</p>
+        <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+        <p style="font-size: 12px; color: #777;">Email tự động từ Hệ thống Giám sát & Quản lý Ao nuôi Tôm AquaSense.</p>
+      </div>
+    `;
+
+    this.logger.log(`Đang gửi alert email (${safeLevel}) tới: ${email}`);
+
+    await this.transporter.sendMail({
+      from: `"AquaSense Alert" <${this.emailUser || 'no-reply@aquasense.vn'}>`,
+      to: email,
+      subject,
+      text,
+      html,
+    });
+
+    this.logger.log(`Gửi alert email thành công tới: ${email}`);
   }
 }

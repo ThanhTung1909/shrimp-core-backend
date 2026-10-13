@@ -88,4 +88,75 @@ export class EsmsService {
       );
     }
   }
+
+  /**
+   * Gửi tin nhắn cảnh báo (Alert SMS) qua eSMS
+   * @param phone Số điện thoại người nhận
+   * @param message Nội dung cảnh báo cần gửi
+   */
+  async sendAlertSMS(phone: string, message: string): Promise<any> {
+    const apiKey = this.configService.get<string>('ESMS_API_KEY');
+    const secretKey = this.configService.get<string>('ESMS_SECRET_KEY');
+
+    if (!apiKey || !secretKey) {
+      this.logger.error('Thiếu cấu hình ESMS_API_KEY hoặc ESMS_SECRET_KEY');
+      throw new InternalServerErrorException('Lỗi cấu hình SMS Gateway');
+    }
+
+    const brandname = this.configService.get<string>('ESMS_BRANDNAME') || 'Baotrixemay';
+    const normalizedPhone = phone.replace(/\D/g, '');
+
+    const payload = {
+      ApiKey: apiKey,
+      SecretKey: secretKey,
+      Phone: normalizedPhone,
+      Content: message,
+      Brandname: brandname,
+      SmsType: '2',
+      IsUnicode: '0',
+    };
+
+    this.logger.debug(`Sending Alert SMS to eSMS. Payload: ${JSON.stringify({ ...payload, SecretKey: '***' })}`);
+
+    try {
+      const response = await fetch(this.apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const text = await response.text();
+
+      if (text.trim().startsWith('<')) {
+        this.logger.error(`eSMS returned XML/HTML error page: ${text}`);
+        throw new InternalServerErrorException('eSMS Gateway trả về định dạng không hợp lệ (XML/HTML).');
+      }
+
+      let data: any;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        this.logger.error(`Failed to parse eSMS JSON response. Raw text: ${text}`);
+        throw new InternalServerErrorException('Không thể phân tích phản hồi từ eSMS Gateway.');
+      }
+
+      this.logger.debug(`Response from eSMS: ${JSON.stringify(data)}`);
+
+      if (data.CodeResult !== '100') {
+        const errorMsg = `eSMS Error [Code ${data.CodeResult}]: ${data.ErrorMessage}`;
+        this.logger.error(errorMsg);
+        throw new InternalServerErrorException(errorMsg);
+      }
+
+      this.logger.log(`Gửi Alert SMS thành công tới ${normalizedPhone}, RefId: ${data.SMSID}`);
+      return data;
+    } catch (error: any) {
+      this.logger.error(`Lỗi kết nối hoặc xử lý eSMS Alert: ${error.message}`);
+      throw new InternalServerErrorException(
+        error.message || 'Không thể kết nối đến hệ thống gửi SMS',
+      );
+    }
+  }
 }

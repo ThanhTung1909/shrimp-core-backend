@@ -12,11 +12,13 @@ import { DeviceHealthService } from './device-health.service.js';
 import { TelemetryGateway } from './telemetry.gateway.js';
 import { RedisModule } from '../../common/redis/redis.module.js';
 import { PondsModule } from '../ponds/ponds.module.js';
+import { NotificationsModule } from '../notifications/notifications.module.js';
 
 @Module({
   imports: [
     ConfigModule,
     RedisModule,
+    NotificationsModule,
     forwardRef(() => PondsModule),
     TypeOrmModule.forFeature([TelemetryData, Device, Alert]),
     JwtModule.registerAsync({

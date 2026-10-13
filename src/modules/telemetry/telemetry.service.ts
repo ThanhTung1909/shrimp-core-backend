@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
 import { TelemetryData } from './entities/telemetry-data.entity.js';
@@ -10,6 +10,7 @@ import { Alert } from '../alerts/entities/alert.entity.js';
 import { AlertLevel } from '../../common/enums/alert-level.enum.js';
 import { AlertStatus } from '../../common/enums/alert-status.enum.js';
 import { RedisService } from '../../common/redis/redis.service.js';
+import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service.js';
 
 @Injectable()
 export class TelemetryService implements OnModuleInit {
@@ -24,6 +25,8 @@ export class TelemetryService implements OnModuleInit {
     private readonly alertRepo: Repository<Alert>,
     private readonly dataSource: DataSource,
     private readonly redisService?: RedisService,
+    @Optional()
+    private readonly notificationDispatcher?: NotificationDispatcherService,
   ) {}
 
   async onModuleInit() {
@@ -242,6 +245,13 @@ export class TelemetryService implements OnModuleInit {
           message: `Thiết bị ${device.deviceName || device.deviceId} mất kết nối mạng đột ngột hoặc quá hạn phản hồi`,
         });
         const savedAlert = await this.alertRepo.save(newAlert);
+
+        // Scenario 32: Asynchronous non-blocking dispatch to prevent blocking telemetry
+        if (this.notificationDispatcher) {
+          void this.notificationDispatcher.dispatchAlert(savedAlert).catch((err: any) => {
+            this.logger.error(`[TelemetryService] Dispatch alert error: ${err.message}`);
+          });
+        }
 
         // Publish alert:triggered lên Redis Pub/Sub
         if (this.redisService) {

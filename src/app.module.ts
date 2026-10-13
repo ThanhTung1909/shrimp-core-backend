@@ -12,6 +12,7 @@ import { RedisModule } from './common/redis/redis.module.js';
 
 import { ScheduleModule } from '@nestjs/schedule';
 import { EsmsModule } from './common/esms/esms.module.js';
+import { NotificationsModule } from './modules/notifications/notifications.module.js';
 
 @Module({
   imports: [
@@ -53,6 +54,9 @@ import { EsmsModule } from './common/esms/esms.module.js';
 
     // Module quản lý dữ liệu cảm biến chuỗi thời gian
     TelemetryModule,
+
+    // Module thông báo đa kênh (FCM Push, SMS, Email)
+    NotificationsModule,
   ],
   controllers: [],
   providers: [],

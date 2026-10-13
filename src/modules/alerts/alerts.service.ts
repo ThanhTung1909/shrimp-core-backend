@@ -1,17 +1,35 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Alert } from './entities/alert.entity.js';
 import { QueryAlertDto } from './dto/query-alert.dto.js';
 import { ResolveAlertDto } from './dto/resolve-alert.dto.js';
 import { AlertStatus } from '../../common/enums/alert-status.enum.js';
+import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service.js';
 
 @Injectable()
 export class AlertsService {
+  private readonly logger = new Logger(AlertsService.name);
+
   constructor(
     @InjectRepository(Alert)
     private readonly alertRepo: Repository<Alert>,
+    @Optional()
+    private readonly notificationDispatcher?: NotificationDispatcherService,
   ) {}
+
+  async createAlert(alertData: Partial<Alert>): Promise<Alert> {
+    const alert = this.alertRepo.create(alertData);
+    const saved = await this.alertRepo.save(alert);
+
+    if (this.notificationDispatcher) {
+      void this.notificationDispatcher.dispatchAlert(saved).catch((err: any) => {
+        this.logger.error(`[AlertsService] Dispatch alert error: ${err.message}`);
+      });
+    }
+
+    return saved;
+  }
 
   async findAll(query: QueryAlertDto): Promise<{ data: Alert[]; total: number }> {
     const { page = 1, limit = 20, deviceId, isResolved } = query;
