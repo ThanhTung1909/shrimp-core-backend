@@ -157,9 +157,20 @@ describe('LoginLockoutService guards and PostgreSQL serialization', () => {
     userId: randomUUID(), isLocked: false, isActive: true, tokenVersion: 7, ...overrides,
   });
 
-  it('returns generic 401 for a durable lock and 429 with remaining TTL for temporary locks', () => {
+  it('returns 423 for a durable lock and 429 with remaining TTL for temporary locks', () => {
     const service = makeService();
-    expect(() => service.assertNotLocked(makeUser({ isLocked: true })))
+    try {
+      service.assertNotLocked(makeUser({ isLocked: true }));
+      expect.fail('durable lock must reject login');
+    } catch (error) {
+      expect(error).toBeInstanceOf(HttpException);
+      expect((error as HttpException).getStatus()).toBe(423);
+      expect((error as HttpException).getResponse()).toMatchObject({
+        statusCode: 423,
+        errorCode: 'ACCOUNT_PENDING_ADMIN_UNLOCK',
+      });
+    }
+    expect(() => service.assertNotLocked(makeUser({ isLocked: true }), undefined, false))
       .toThrow(UnauthorizedException);
     try {
       service.assertNotLocked(makeUser(), { attempts: 3, tempTtl: 21, pendingManual: false });
@@ -167,7 +178,12 @@ describe('LoginLockoutService guards and PostgreSQL serialization', () => {
     } catch (error) {
       expect(error).toBeInstanceOf(HttpException);
       expect((error as HttpException).getStatus()).toBe(429);
-      expect((error as HttpException).getResponse()).toMatchObject({ retryAfterSeconds: 21, retryAfter: 21 });
+      expect((error as HttpException).getResponse()).toMatchObject({
+        statusCode: 429,
+        errorCode: 'ACCOUNT_TEMPORARILY_LOCKED',
+        retryAfterSeconds: 21,
+        retryAfter: 21,
+      });
     }
     expect(() => service.assertNotLocked(makeUser(), { attempts: 3, tempTtl: 21, pendingManual: false }, false))
       .not.toThrow();
@@ -177,13 +193,27 @@ describe('LoginLockoutService guards and PostgreSQL serialization', () => {
     const service = makeService();
     expect(() => service.assertNotLocked(null)).toThrow(UnauthorizedException);
     expect(() => service.assertNotLocked(makeUser({ isActive: false }))).toThrow(UnauthorizedException);
-    expect(() => service.assertNotLocked(makeUser(), { attempts: 5, tempTtl: 0, pendingManual: false }))
-      .toThrow(UnauthorizedException);
+    try {
+      service.assertNotLocked(makeUser(), { attempts: 5, tempTtl: 0, pendingManual: false });
+      expect.fail('fifth-attempt state must reject login with 423');
+    } catch (error) {
+      expect(error).toBeInstanceOf(HttpException);
+      expect((error as HttpException).getStatus()).toBe(423);
+      expect((error as HttpException).getResponse()).toMatchObject({
+        statusCode: 423,
+        errorCode: 'ACCOUNT_PENDING_ADMIN_UNLOCK',
+      });
+    }
     try {
       service.assertNotLocked(null, { attempts: 3, tempTtl: 30, pendingManual: false });
       expect.fail('unknown identifiers must get the same temporary response');
     } catch (error) {
       expect((error as HttpException).getStatus()).toBe(429);
+      expect((error as HttpException).getResponse()).toMatchObject({
+        statusCode: 429,
+        errorCode: 'ACCOUNT_TEMPORARILY_LOCKED',
+        retryAfterSeconds: 30,
+      });
     }
   });
 

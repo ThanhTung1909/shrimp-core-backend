@@ -11,6 +11,8 @@ import { UserSession } from '../../modules/auth/entities/user-session.entity.js'
 import { RedisService } from './redis.service.js';
 import {
   LOGIN_LOCKOUT_CONFIG,
+  LOCKOUT_ERROR_CODES,
+  LOCKOUT_MESSAGES,
   getLoginFailKey,
   getLoginPendingManualKey,
   getLoginTempLockKey,
@@ -133,28 +135,57 @@ export class LoginLockoutService {
     }
   }
 
-  /** Use the same generic rejection for unknown, inactive and manually locked users. */
   assertNotLocked(
     user: User | null,
     state?: LoginLockoutState,
     checkTemporary = true,
   ): void {
-    if (user?.isLocked || state?.pendingManual || (state?.attempts ?? 0) >= LOGIN_LOCKOUT_CONFIG.MANUAL_LOCK_THRESHOLD) {
+    if (!user || !user.isActive) {
+      if (checkTemporary && state && state.tempTtl > 0) {
+        throw new HttpException(
+          {
+            statusCode: HttpStatus.TOO_MANY_REQUESTS,
+            message: LOCKOUT_MESSAGES.TEMPORARILY_LOCKED,
+            errorCode: LOCKOUT_ERROR_CODES.TEMPORARILY_LOCKED,
+            error: LOCKOUT_ERROR_CODES.TEMPORARILY_LOCKED,
+            retryAfterSeconds: state.tempTtl,
+            retryAfter: state.tempTtl,
+          },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+      throw new UnauthorizedException('Số điện thoại hoặc mật khẩu không đúng!');
+    }
+    if (
+      user.isLocked ||
+      state?.pendingManual ||
+      (state?.attempts ?? 0) >= LOGIN_LOCKOUT_CONFIG.MANUAL_LOCK_THRESHOLD
+    ) {
+      if (checkTemporary) {
+        throw new HttpException(
+          {
+            statusCode: 423,
+            message: LOCKOUT_MESSAGES.PENDING_ADMIN_UNLOCK,
+            errorCode: LOCKOUT_ERROR_CODES.PENDING_ADMIN_UNLOCK,
+            error: LOCKOUT_ERROR_CODES.PENDING_ADMIN_UNLOCK,
+          },
+          423,
+        );
+      }
       throw new UnauthorizedException('Số điện thoại hoặc mật khẩu không đúng!');
     }
     if (checkTemporary && state && state.tempTtl > 0) {
       throw new HttpException(
         {
           statusCode: HttpStatus.TOO_MANY_REQUESTS,
-          message: 'Tạm thời không thể đăng nhập. Vui lòng thử lại sau.',
+          message: LOCKOUT_MESSAGES.TEMPORARILY_LOCKED,
+          errorCode: LOCKOUT_ERROR_CODES.TEMPORARILY_LOCKED,
+          error: LOCKOUT_ERROR_CODES.TEMPORARILY_LOCKED,
           retryAfterSeconds: state.tempTtl,
           retryAfter: state.tempTtl,
         },
         HttpStatus.TOO_MANY_REQUESTS,
       );
-    }
-    if (!user || !user.isActive) {
-      throw new UnauthorizedException('Số điện thoại hoặc mật khẩu không đúng!');
     }
   }
 

@@ -396,7 +396,7 @@ export class AuthService {
         if (current) await lockout.persistManualLock(manager, current);
         return undefined;
       });
-      throw new UnauthorizedException('Số điện thoại hoặc mật khẩu không đúng!');
+      lockout.assertNotLocked(user, state);
     }
     if (user) {
       lockout.assertNotLocked(user, state);
@@ -417,6 +417,7 @@ export class AuthService {
           if (current) await lockout.persistManualLock(manager, current);
           return undefined;
         });
+        lockout.assertNotLocked(user, failure);
       }
       if (failure.tempTtl > 0) lockout.assertNotLocked(user, failure);
       throw new UnauthorizedException('Số điện thoại hoặc mật khẩu không đúng!');
@@ -428,7 +429,10 @@ export class AuthService {
       const passwordValid = await bcrypt.compare(loginDto.password, current!.passwordHash);
       if (!passwordValid) {
         const failure = await lockout.recordFailure(current!.userId);
-        if (failure.pendingManual) await lockout.persistManualLock(manager, current!);
+        if (failure.pendingManual) {
+          await lockout.persistManualLock(manager, current!);
+          lockout.assertNotLocked(current, failure);
+        }
         if (failure.tempTtl > 0) lockout.assertNotLocked(current, failure);
         throw new UnauthorizedException('Số điện thoại hoặc mật khẩu không đúng!');
       }

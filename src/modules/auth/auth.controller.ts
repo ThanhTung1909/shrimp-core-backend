@@ -247,6 +247,8 @@ export class AuthController {
   @ApiOperation({ summary: 'Đăng nhập hệ thống bằng số điện thoại và mật khẩu' })
   @ApiResponse({ status: 200, description: 'Đăng nhập thành công trả về cặp Access & Refresh tokens' })
   @ApiResponse({ status: 401, description: 'Sai số điện thoại hoặc mật khẩu' })
+  @ApiResponse({ status: 423, description: 'Tài khoản đã bị khóa do đăng nhập sai quá số lần cho phép (ACCOUNT_PENDING_ADMIN_UNLOCK)' })
+  @ApiResponse({ status: 429, description: 'Tài khoản tạm thời bị khóa do đăng nhập sai nhiều lần (ACCOUNT_TEMPORARILY_LOCKED)' })
   async login(
     @Body() loginDto: LoginDto,
     @Ip() ip?: string,

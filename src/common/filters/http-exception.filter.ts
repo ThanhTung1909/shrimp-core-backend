@@ -80,9 +80,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
         } else {
           message = resObj.message || exception.message;
           errorCode =
-            resObj.error
-              ? String(resObj.error).toUpperCase().replace(/\s+/g, '_')
-              : HttpStatus[statusCode] || 'HTTP_ERROR';
+            resObj.errorCode
+              ? String(resObj.errorCode)
+              : resObj.error
+                ? String(resObj.error).toUpperCase().replace(/\s+/g, '_')
+                : HttpStatus[statusCode] || 'HTTP_ERROR';
 
           if (resObj.error === 'OTP_DELIVERY_UNAVAILABLE' && resObj.data && typeof resObj.data === 'object') {
             const delivery = resObj.data as Record<string, unknown>;

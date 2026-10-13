@@ -1,7 +1,7 @@
 // Adapter for existing direct AuthService unit fixtures. Production always uses
 // LoginLockoutService; these fixtures model the transaction/after-commit boundary.
 import { vi } from 'vitest';
-import { UnauthorizedException } from '@nestjs/common';
+import { HttpException, UnauthorizedException } from '@nestjs/common';
 
 export function authLockoutFixture(users: any, dataSource: any) {
   return {
@@ -9,8 +9,47 @@ export function authLockoutFixture(users: any, dataSource: any) {
     resetLoginFailureState: vi.fn().mockResolvedValue(undefined),
     recordFailure: vi.fn().mockResolvedValue({ attempts: 1, tempTtl: 0, pendingManual: false }),
     persistManualLock: vi.fn(),
-    assertNotLocked: vi.fn((user: any, state?: any) => {
-      if (!user || !user.isActive || user.isLocked || state?.pendingManual) throw new UnauthorizedException();
+    assertNotLocked: vi.fn((user: any, state?: any, checkTemporary = true) => {
+      if (!user || !user.isActive) {
+        if (checkTemporary && state && state.tempTtl > 0) {
+          throw new HttpException(
+            {
+              statusCode: 429,
+              message: 'Tài khoản tạm thời bị khóa do đăng nhập sai nhiều lần. Vui lòng thử lại sau 30 giây.',
+              errorCode: 'ACCOUNT_TEMPORARILY_LOCKED',
+              retryAfterSeconds: state.tempTtl,
+              retryAfter: state.tempTtl,
+            },
+            429,
+          );
+        }
+        throw new UnauthorizedException();
+      }
+      if (user.isLocked || state?.pendingManual || (state?.attempts ?? 0) >= 5) {
+        if (checkTemporary) {
+          throw new HttpException(
+            {
+              statusCode: 423,
+              message: 'Tài khoản đã bị khóa do đăng nhập sai quá số lần cho phép. Vui lòng liên hệ quản trị viên để được mở khóa.',
+              errorCode: 'ACCOUNT_PENDING_ADMIN_UNLOCK',
+            },
+            423,
+          );
+        }
+        throw new UnauthorizedException();
+      }
+      if (checkTemporary && state && state.tempTtl > 0) {
+        throw new HttpException(
+          {
+            statusCode: 429,
+            message: 'Tài khoản tạm thời bị khóa do đăng nhập sai nhiều lần. Vui lòng thử lại sau 30 giây.',
+            errorCode: 'ACCOUNT_TEMPORARILY_LOCKED',
+            retryAfterSeconds: state.tempTtl,
+            retryAfter: state.tempTtl,
+          },
+          429,
+        );
+      }
     }),
     withUserLock: vi.fn(async (id: string, callback: any) => {
       const jobs: Array<() => Promise<void>> = [];

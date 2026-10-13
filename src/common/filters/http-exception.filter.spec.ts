@@ -166,4 +166,60 @@ describe('AllExceptionsFilter', () => {
     );
     expect(JSON.stringify(mockResponse.json.mock.calls)).not.toContain('must-not-leak');
   });
+
+  it('preserves ACCOUNT_TEMPORARILY_LOCKED errorCode, message, and retryAfterSeconds on 429', () => {
+    mockResponse.setHeader = vi.fn();
+    const exception = new HttpException(
+      {
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        message: 'Tài khoản tạm thời bị khóa do đăng nhập sai nhiều lần. Vui lòng thử lại sau 30 giây.',
+        errorCode: 'ACCOUNT_TEMPORARILY_LOCKED',
+        retryAfterSeconds: 21,
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
+
+    filter.catch(exception, mockArgumentsHost);
+
+    expect(mockResponse.status).toHaveBeenCalledWith(HttpStatus.TOO_MANY_REQUESTS);
+    expect(mockResponse.setHeader).toHaveBeenCalledWith('Retry-After', '21');
+    expect(mockResponse.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        statusCode: 429,
+        message: 'Tài khoản tạm thời bị khóa do đăng nhập sai nhiều lần. Vui lòng thử lại sau 30 giây.',
+        errorCode: 'ACCOUNT_TEMPORARILY_LOCKED',
+        retryAfterSeconds: 21,
+        path: '/test-endpoint',
+      }),
+    );
+  });
+
+  it('preserves ACCOUNT_PENDING_ADMIN_UNLOCK errorCode and message on 423 without retryAfterSeconds', () => {
+    mockResponse.setHeader = vi.fn();
+    const exception = new HttpException(
+      {
+        statusCode: 423,
+        message: 'Tài khoản đã bị khóa do đăng nhập sai quá số lần cho phép. Vui lòng liên hệ quản trị viên để được mở khóa.',
+        errorCode: 'ACCOUNT_PENDING_ADMIN_UNLOCK',
+      },
+      423,
+    );
+
+    filter.catch(exception, mockArgumentsHost);
+
+    expect(mockResponse.status).toHaveBeenCalledWith(423);
+    expect(mockResponse.setHeader).not.toHaveBeenCalled();
+    expect(mockResponse.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        statusCode: 423,
+        message: 'Tài khoản đã bị khóa do đăng nhập sai quá số lần cho phép. Vui lòng liên hệ quản trị viên để được mở khóa.',
+        errorCode: 'ACCOUNT_PENDING_ADMIN_UNLOCK',
+        path: '/test-endpoint',
+      }),
+    );
+    const jsonCallArg = mockResponse.json.mock.calls[0][0];
+    expect(jsonCallArg).not.toHaveProperty('retryAfterSeconds');
+  });
 });

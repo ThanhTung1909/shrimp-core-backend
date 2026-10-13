@@ -151,7 +151,13 @@ describe('P0-3 authentication recovery and durable login locks', () => {
 
   it('denies password login under a durable lock without issuing tokens', async () => {
     user.isLocked = true;
-    await expect(login()).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(login()).rejects.toMatchObject({
+      status: 423,
+      response: {
+        statusCode: 423,
+        errorCode: 'ACCOUNT_PENDING_ADMIN_UNLOCK',
+      },
+    });
     expect(jwt.signAsync).not.toHaveBeenCalled();
     expect(lockout.recordFailure).not.toHaveBeenCalled();
     expect(lockout.resetLoginFailureState).not.toHaveBeenCalled();
@@ -165,9 +171,15 @@ describe('P0-3 authentication recovery and durable login locks', () => {
     expect(lockout.resetLoginFailureState).not.toHaveBeenCalled();
   });
 
-  it('returns 401 only after fifth failure persists the manual lock and revokes sessions', async () => {
+  it('returns 423 only after fifth failure persists the manual lock and revokes sessions', async () => {
     state.attempts = 4;
-    await expect(login(user.phoneNumber, 'WrongRecovery@2026')).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(login(user.phoneNumber, 'WrongRecovery@2026')).rejects.toMatchObject({
+      status: 423,
+      response: {
+        statusCode: 423,
+        errorCode: 'ACCOUNT_PENDING_ADMIN_UNLOCK',
+      },
+    });
     expect(events).toEqual(['begin', 'persist-lock', 'revoke:LOGIN_FAILED_LOCK', 'commit']);
     expect(user).toMatchObject({ isLocked: true, tokenVersion: 2 });
     expect(sessions[0]).toMatchObject({ revokeReason: 'LOGIN_FAILED_LOCK', revokedAt: expect.any(Date) });
@@ -175,9 +187,15 @@ describe('P0-3 authentication recovery and durable login locks', () => {
     expect(jwt.signAsync).not.toHaveBeenCalled();
   });
 
-  it('repairs a pending fifth-failure durable lock before returning generic 401', async () => {
+  it('repairs a pending fifth-failure durable lock before returning 423', async () => {
     state = { attempts: 5, tempTtl: 0, pendingManual: true };
-    await expect(login()).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(login()).rejects.toMatchObject({
+      status: 423,
+      response: {
+        statusCode: 423,
+        errorCode: 'ACCOUNT_PENDING_ADMIN_UNLOCK',
+      },
+    });
     expect(events).toEqual(['begin', 'persist-lock', 'revoke:LOGIN_FAILED_LOCK', 'commit']);
     expect(lockout.recordFailure).not.toHaveBeenCalled();
     expect(user.isLocked).toBe(true);
