@@ -252,6 +252,437 @@ describe('TelemetryService', () => {
     });
   });
 
+  describe('Phase 8 / Section 12 — 30 Alert Engine Scenarios', () => {
+    const pondId = 'pond-uuid-1';
+    const deviceId = 'device-uuid-1';
+    const standardDevice = { deviceId, pondId, status: DeviceStatus.ONLINE };
+
+    // Standard configs for 5 metrics
+    const baseConfigs = [
+      { pondId, metricName: 'temperature', minValue: 20, maxValue: 30, isActive: true },
+      { pondId, metricName: 'pH', minValue: 7.0, maxValue: 8.5, isActive: true },
+      { pondId, metricName: 'dissolvedOxygen', minValue: 4.0, maxValue: 8.0, isActive: true },
+      { pondId, metricName: 'salinity', minValue: 10, maxValue: 25, isActive: true },
+      { pondId, metricName: 'turbidity', minValue: 10, maxValue: 50, isActive: true },
+    ];
+
+    beforeEach(() => {
+      mockDeviceRepo.findOne.mockResolvedValue({ ...standardDevice });
+      mockThresholdConfigRepo.find.mockResolvedValue([...baseConfigs]);
+      mockRedisService.setIfAbsent.mockResolvedValue(true);
+      mockRedisService.del.mockResolvedValue(1);
+      mockAlertsService.createThresholdAlert.mockResolvedValue({ alertId: 'alert-1' });
+    });
+
+    it('Scenario 01: Temperature BELOW_MIN triggers WARNING LOW alert', async () => {
+      await service.processTelemetryPayload({ deviceId, temperature: 18 });
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:${deviceId}:temperature:LOW`,
+        '1',
+        900,
+      );
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pondId,
+          deviceId,
+          metricName: 'temperature',
+          triggeredValue: 18,
+          direction: 'LOW',
+        }),
+      );
+    });
+
+    it('Scenario 02: Temperature ABOVE_MAX triggers WARNING HIGH alert', async () => {
+      await service.processTelemetryPayload({ deviceId, temperature: 32 });
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:${deviceId}:temperature:HIGH`,
+        '1',
+        900,
+      );
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pondId,
+          deviceId,
+          metricName: 'temperature',
+          triggeredValue: 32,
+          direction: 'HIGH',
+        }),
+      );
+    });
+
+    it('Scenario 03: Temperature NORMAL within range triggers no alert', async () => {
+      await service.processTelemetryPayload({ deviceId, temperature: 25 });
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+      expect(mockRedisService.setIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it('Scenario 04: PH BELOW_MIN triggers WARNING LOW alert', async () => {
+      await service.processTelemetryPayload({ deviceId, ph: 6.5 });
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:${deviceId}:ph:LOW`,
+        '1',
+        900,
+      );
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pondId,
+          deviceId,
+          metricName: 'pH',
+          triggeredValue: 6.5,
+          direction: 'LOW',
+        }),
+      );
+    });
+
+    it('Scenario 05: PH ABOVE_MAX triggers WARNING HIGH alert', async () => {
+      await service.processTelemetryPayload({ deviceId, ph: 9.0 });
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:${deviceId}:ph:HIGH`,
+        '1',
+        900,
+      );
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pondId,
+          deviceId,
+          metricName: 'pH',
+          triggeredValue: 9.0,
+          direction: 'HIGH',
+        }),
+      );
+    });
+
+    it('Scenario 06: Dissolved Oxygen BELOW_MIN triggers WARNING LOW alert', async () => {
+      await service.processTelemetryPayload({ deviceId, dissolvedOxygen: 3.5 });
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:${deviceId}:dissolvedoxygen:LOW`,
+        '1',
+        900,
+      );
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pondId,
+          deviceId,
+          metricName: 'dissolvedOxygen',
+          triggeredValue: 3.5,
+          direction: 'LOW',
+        }),
+      );
+    });
+
+    it('Scenario 07: Dissolved Oxygen ABOVE_MAX triggers WARNING HIGH alert', async () => {
+      await service.processTelemetryPayload({ deviceId, dissolvedOxygen: 9.2 });
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:${deviceId}:dissolvedoxygen:HIGH`,
+        '1',
+        900,
+      );
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pondId,
+          deviceId,
+          metricName: 'dissolvedOxygen',
+          triggeredValue: 9.2,
+          direction: 'HIGH',
+        }),
+      );
+    });
+
+    it('Scenario 08: Salinity BELOW_MIN triggers WARNING LOW alert', async () => {
+      await service.processTelemetryPayload({ deviceId, salinity: 8 });
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:${deviceId}:salinity:LOW`,
+        '1',
+        900,
+      );
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pondId,
+          deviceId,
+          metricName: 'salinity',
+          triggeredValue: 8,
+          direction: 'LOW',
+        }),
+      );
+    });
+
+    it('Scenario 09: Salinity ABOVE_MAX triggers WARNING HIGH alert', async () => {
+      await service.processTelemetryPayload({ deviceId, salinity: 28 });
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:${deviceId}:salinity:HIGH`,
+        '1',
+        900,
+      );
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pondId,
+          deviceId,
+          metricName: 'salinity',
+          triggeredValue: 28,
+          direction: 'HIGH',
+        }),
+      );
+    });
+
+    it('Scenario 10: Turbidity BELOW_MIN triggers WARNING LOW alert', async () => {
+      await service.processTelemetryPayload({ deviceId, turbidity: 5 });
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:${deviceId}:turbidity:LOW`,
+        '1',
+        900,
+      );
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pondId,
+          deviceId,
+          metricName: 'turbidity',
+          triggeredValue: 5,
+          direction: 'LOW',
+        }),
+      );
+    });
+
+    it('Scenario 11: Turbidity ABOVE_MAX triggers WARNING HIGH alert', async () => {
+      await service.processTelemetryPayload({ deviceId, turbidity: 55 });
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:${deviceId}:turbidity:HIGH`,
+        '1',
+        900,
+      );
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pondId,
+          deviceId,
+          metricName: 'turbidity',
+          triggeredValue: 55,
+          direction: 'HIGH',
+        }),
+      );
+    });
+
+    it('Scenario 12: Value exactly equals minValue is normal and triggers no alert', async () => {
+      await service.processTelemetryPayload({ deviceId, temperature: 20 });
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+      expect(mockRedisService.setIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it('Scenario 13: Value exactly equals maxValue is normal and triggers no alert', async () => {
+      await service.processTelemetryPayload({ deviceId, temperature: 30 });
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+      expect(mockRedisService.setIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it('Scenario 14: Missing metric (null or undefined) is skipped without alert', async () => {
+      await service.processTelemetryPayload({
+        deviceId,
+        temperature: null as any,
+        ph: undefined,
+      });
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+    });
+
+    it('Scenario 15: Metric value = 0 is treated as valid number and triggers BELOW_MIN alert', async () => {
+      await service.processTelemetryPayload({ deviceId, turbidity: 0 });
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metricName: 'turbidity',
+          triggeredValue: 0,
+          direction: 'LOW',
+        }),
+      );
+    });
+
+    it('Scenario 16: Pond without active threshold config triggers no alert', async () => {
+      mockThresholdConfigRepo.find.mockResolvedValue([]);
+      await service.processTelemetryPayload({ deviceId, temperature: 15 });
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+    });
+
+    it('Scenario 17: Device without assigned pond skips threshold evaluation entirely', async () => {
+      mockDeviceRepo.findOne.mockResolvedValue({ deviceId: 'unassigned-dev', pondId: null });
+      await service.processTelemetryPayload({ deviceId: 'unassigned-dev', temperature: 15 });
+      expect(mockThresholdConfigRepo.find).not.toHaveBeenCalled();
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+    });
+
+    it('Scenario 18: Multiple metrics violating simultaneously trigger separate alerts', async () => {
+      await service.processTelemetryPayload({
+        deviceId,
+        temperature: 35,
+        ph: 6.0,
+      });
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(2);
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ metricName: 'temperature', direction: 'HIGH', triggeredValue: 35 }),
+      );
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ metricName: 'pH', direction: 'LOW', triggeredValue: 6.0 }),
+      );
+    });
+
+    it('Scenario 19: Cooldown prevents duplicate alert within 15 minutes', async () => {
+      mockRedisService.setIfAbsent.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      await service.processTelemetryPayload({ deviceId, temperature: 18 });
+      await service.processTelemetryPayload({ deviceId, temperature: 18 });
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(1);
+    });
+
+    it('Scenario 20: Cooldown expires allowing subsequent violation to trigger new alert', async () => {
+      mockRedisService.setIfAbsent
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true);
+
+      await service.processTelemetryPayload({ deviceId, temperature: 18 });
+      await service.processTelemetryPayload({ deviceId, temperature: 18 });
+      await service.processTelemetryPayload({ deviceId, temperature: 18 });
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(2);
+    });
+
+    it('Scenario 21: Different devices maintain isolated cooldowns and alerts', async () => {
+      const dev1 = { deviceId: 'dev-1', pondId };
+      const dev2 = { deviceId: 'dev-2', pondId };
+      mockDeviceRepo.findOne
+        .mockResolvedValueOnce(dev1)
+        .mockResolvedValueOnce(dev2);
+
+      await service.processTelemetryPayload({ deviceId: 'dev-1', temperature: 18 });
+      await service.processTelemetryPayload({ deviceId: 'dev-2', temperature: 18 });
+
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:dev-1:temperature:LOW`,
+        '1',
+        900,
+      );
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:dev-2:temperature:LOW`,
+        '1',
+        900,
+      );
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(2);
+    });
+
+    it('Scenario 22: Different metrics on same device have isolated cooldowns', async () => {
+      await service.processTelemetryPayload({ deviceId, temperature: 18 });
+      await service.processTelemetryPayload({ deviceId, ph: 6.0 });
+
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:${deviceId}:temperature:LOW`,
+        '1',
+        900,
+      );
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:${deviceId}:ph:LOW`,
+        '1',
+        900,
+      );
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(2);
+    });
+
+    it('Scenario 23: Different violation directions (LOW vs HIGH) maintain distinct cooldown keys', async () => {
+      await service.processTelemetryPayload({ deviceId, temperature: 18 });
+      await service.processTelemetryPayload({ deviceId, temperature: 35 });
+
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:${deviceId}:temperature:LOW`,
+        '1',
+        900,
+      );
+      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:${deviceId}:temperature:HIGH`,
+        '1',
+        900,
+      );
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(2);
+    });
+
+    it('Scenario 24: Concurrent telemetry messages do not duplicate alerts due to atomic setIfAbsent', async () => {
+      mockRedisService.setIfAbsent
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+
+      const [res1, res2] = await Promise.all([
+        service.processTelemetryPayload({ deviceId, temperature: 18 }),
+        service.processTelemetryPayload({ deviceId, temperature: 18 }),
+      ]);
+
+      expect(res1).not.toBeNull();
+      expect(res2).not.toBeNull();
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(1);
+    });
+
+    it('Scenario 25: Redis failure does not crash telemetry persistence', async () => {
+      mockRedisService.setIfAbsent.mockRejectedValueOnce(new Error('Redis connection refused'));
+
+      const result = await service.processTelemetryPayload({ deviceId, temperature: 18 });
+
+      expect(result).not.toBeNull();
+      expect(mockTelemetryRepo.save).toHaveBeenCalled();
+    });
+
+    it('Scenario 26: Alert insertion failure rolls back Redis cooldown reservation', async () => {
+      mockAlertsService.createThresholdAlert.mockRejectedValueOnce(new Error('DB write failed'));
+
+      const result = await service.processTelemetryPayload({ deviceId, temperature: 18 });
+
+      expect(result).not.toBeNull();
+      expect(mockRedisService.del).toHaveBeenCalledWith(
+        `alert:cooldown:${pondId}:${deviceId}:temperature:LOW`,
+      );
+    });
+
+    it('Scenario 27: Duplicate MQTT delivery within cooldown window is suppressed', async () => {
+      mockRedisService.setIfAbsent.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+      const payload = { deviceId, temperature: 35 };
+      await service.processTelemetryPayload(payload);
+      await service.processTelemetryPayload(payload);
+
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(1);
+    });
+
+    it('Scenario 28: Buffered telemetry (isBuffered: true) saves data but skips alert generation', async () => {
+      const result = await service.processTelemetryPayload({
+        deviceId,
+        temperature: 45,
+        isBuffered: true,
+      });
+
+      expect(result).not.toBeNull();
+      expect(mockTelemetryRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ isBuffered: true, temperature: 45 }),
+      );
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+      expect(mockRedisService.setIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it('Scenario 29: Telemetry persistence remains fully functional regardless of alert outcome', async () => {
+      mockThresholdConfigRepo.find.mockRejectedValueOnce(new Error('Threshold query error'));
+
+      const result = await service.processTelemetryPayload({ deviceId, temperature: 28 });
+
+      expect(result).not.toBeNull();
+      expect(mockTelemetryRepo.save).toHaveBeenCalled();
+      expect(mockDeviceRepo.update).toHaveBeenCalledWith(
+        deviceId,
+        expect.objectContaining({ status: DeviceStatus.ONLINE }),
+      );
+    });
+
+    it('Scenario 30: Existing realtime event behavior (ONLINE status & offline check) remains functional', async () => {
+      const offlineDev = { deviceId: 'stale-dev', pondId, status: DeviceStatus.ONLINE };
+      mockDeviceRepo.find.mockResolvedValue([offlineDev]);
+      mockDeviceRepo.findOne.mockResolvedValue(offlineDev);
+      mockAlertRepo.findOne.mockResolvedValue(null);
+
+      const count = await service.checkAndMarkOfflineDevices(15);
+
+      expect(count).toBe(1);
+      expect(offlineDev.status).toBe(DeviceStatus.OFFLINE);
+      expect(mockDeviceRepo.save).toHaveBeenCalledWith(offlineDev);
+    });
+  });
+
   describe('getLatestByDeviceId', () => {
     it('nên trả về bản ghi dữ liệu cảm biến mới nhất', async () => {
       const mockRecord = {

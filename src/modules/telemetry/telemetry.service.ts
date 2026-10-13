@@ -142,8 +142,23 @@ export class TelemetryService implements OnModuleInit {
     return normalized;
   }
 
-  private async evaluateThresholds(device: Device, dto: CreateTelemetryDto): Promise<void> {
-    if (!device.pondId) return;
+  async evaluateThresholds(
+    deviceOrId: Device | string,
+    dto: CreateTelemetryDto,
+  ): Promise<void> {
+    const device =
+      typeof deviceOrId === 'string'
+        ? await this.deviceRepo.findOne({ where: { deviceId: deviceOrId } })
+        : deviceOrId;
+
+    if (!device || !device.pondId) return;
+
+    if (dto.isBuffered) {
+      this.logger.debug?.(
+        `[Alert Engine] Bỏ qua đánh giá ngưỡng cho telemetry được đệm (isBuffered: true, deviceId: ${device.deviceId}).`,
+      );
+      return;
+    }
 
     try {
       const configs = await this.thresholdConfigRepo.find({
@@ -168,10 +183,33 @@ export class TelemetryService implements OnModuleInit {
         const numericValue = Number(value);
         const minValue = Number(config.minValue);
         const maxValue = Number(config.maxValue);
-        const direction = numericValue < minValue ? 'LOW' : numericValue > maxValue ? 'HIGH' : null;
+
+        if (
+          !Number.isFinite(numericValue) ||
+          !Number.isFinite(minValue) ||
+          !Number.isFinite(maxValue)
+        ) {
+          continue;
+        }
+
+        if (minValue > maxValue) {
+          this.logger.warn(
+            `[Alert Engine] Cấu hình ngưỡng không hợp lệ cho ao ${device.pondId}, chỉ số ${config.metricName}: minValue (${minValue}) > maxValue (${maxValue}). Bỏ qua.`,
+          );
+          continue;
+        }
+
+        const direction =
+          numericValue < minValue ? 'LOW' : numericValue > maxValue ? 'HIGH' : null;
         if (!direction) continue;
 
-        await this.createThresholdAlert(device, config, metric.normalized, numericValue, direction);
+        await this.createThresholdAlert(
+          device,
+          config,
+          metric.normalized,
+          numericValue,
+          direction,
+        );
       }
     } catch (error) {
       this.logger.error(
