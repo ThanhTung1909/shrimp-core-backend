@@ -322,6 +322,10 @@ describe('DevicesService', () => {
       expect(result.macAddress).toBe(dto.macAddress);
       expect(result.firmwareVersion).toBe(dto.firmwareVersion);
       expect(result.status).toBe(DeviceStatus.ONLINE);
+      expect(dto.lastActiveAt).toBeDefined();
+      if (!dto.lastActiveAt) {
+        throw new Error('Test fixture lastActiveAt must be defined');
+      }
       expect(result.lastActiveAt).toEqual(new Date(dto.lastActiveAt));
       expect(mockDeviceRepo.save).toHaveBeenCalledWith(device);
     });

@@ -197,6 +197,14 @@ describe('P0-3 authentication recovery and durable login locks', () => {
     state.attempts = 0;
     users.findByPhoneNumber.mockResolvedValueOnce(null);
     const unknownFailure = await login('0999123457', 'WrongRecovery@2026').catch((error: HttpException) => error);
+    expect(knownFailure).toBeInstanceOf(HttpException);
+    expect(unknownFailure).toBeInstanceOf(HttpException);
+
+    if (!(knownFailure instanceof HttpException) ||
+      !(unknownFailure instanceof HttpException)) {
+      throw new Error('Expected login to reject with HttpException');
+    }
+
     expect(unknownFailure.getResponse()).toEqual(knownFailure.getResponse());
     expect(lockout.recordFailure).toHaveBeenLastCalledWith(expect.stringMatching(/^unknown:[a-f0-9]{64}$/), false);
   });

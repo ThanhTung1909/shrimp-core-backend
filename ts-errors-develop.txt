@@ -1,0 +1,60 @@
+src/modules/devices/devices.controller.spec.ts(69,5): error TS2345: Argument of type '(_endpoint: string | ((userId: string, role: Role, query: FindDevicesQueryDto) => Promise<PaginatedDevicesResult>) | ((deviceId: string, userId: string, role: Role) => Promise<...>), handler: string | ... 1 more ... | ((deviceId: string, userId: string, role: Role) => Promise<...>)) => void' is not assignable to parameter of type '(...args: (string | ((userId: string, role: Role, query: FindDevicesQueryDto) => Promise<PaginatedDevicesResult>))[] | (string | ((deviceId: string, userId: string, role: Role) => Promise<...>))[]) => Awaitable<...>'.
+  Types of parameters '_endpoint' and 'args' are incompatible.
+    Type '(string | ((userId: string, role: Role, query: FindDevicesQueryDto) => Promise<PaginatedDevicesResult>))[] | (string | ((deviceId: string, userId: string, role: Role) => Promise<...>))[]' is not assignable to type '[_endpoint: string | ((userId: string, role: Role, query: FindDevicesQueryDto) => Promise<PaginatedDevicesResult>) | ((deviceId: string, userId: string, role: Role) => Promise<...>), handler: string | ... 1 more ... | ((deviceId: string, userId: string, role: Role) => Promise<...>)]'.
+      Type '(string | ((userId: string, role: Role, query: FindDevicesQueryDto) => Promise<PaginatedDevicesResult>))[]' is not assignable to type '[_endpoint: string | ((userId: string, role: Role, query: FindDevicesQueryDto) => Promise<PaginatedDevicesResult>) | ((deviceId: string, userId: string, role: Role) => Promise<...>), handler: string | ... 1 more ... | ((deviceId: string, userId: string, role: Role) => Promise<...>)]'.
+        Target requires 2 element(s) but source may have fewer.
+src/modules/devices/devices.controller.spec.ts(71,51): error TS2345: Argument of type 'string | ((userId: string, role: Role, query: FindDevicesQueryDto) => Promise<PaginatedDevicesResult>) | ((deviceId: string, userId: string, role: Role) => Promise<...>)' is not assignable to parameter of type 'Function'.
+  Type 'string' is not assignable to type 'Function'.
+src/modules/devices/devices.service.spec.ts(325,52): error TS2769: No overload matches this call.
+  Overload 1 of 5, '(value: string | number | Date): Date', gave the following error.
+    Argument of type 'string | undefined' is not assignable to parameter of type 'string | number | Date'.
+      Type 'undefined' is not assignable to type 'string | number | Date'.
+  Overload 2 of 5, '(vd: VarDate): Date', gave the following error.
+    Argument of type 'string | undefined' is not assignable to parameter of type 'VarDate'.
+      Type 'undefined' is not assignable to type 'VarDate'.
+  Overload 3 of 5, '(value: string | number): Date', gave the following error.
+    Argument of type 'string | undefined' is not assignable to parameter of type 'string | number'.
+      Type 'undefined' is not assignable to type 'string | number'.
+test/api-authorization.spec.ts(526,36): error TS18047: 'd.pond' is possibly 'null'.
+test/api-authorization.spec.ts(556,9): error TS2345: Argument of type '{ pondName: string; areaM2: number; depthM: number; userId: string; }' is not assignable to parameter of type 'CreatePondDto'.
+  Property 'shrimpDensity' is missing in type '{ pondName: string; areaM2: number; depthM: number; userId: string; }' but required in type 'CreatePondDto'.
+test/app.e2e-spec.ts(4,21): error TS2307: Cannot find module 'supertest/types' or its corresponding type declarations.
+test/auth-lockout-recovery.spec.ts(200,27): error TS2339: Property 'getResponse' does not exist on type 'HttpException | { userId: string; fullName: string; phoneNumber: string; role: Role; tokenVersion: number; mustChangePassword: boolean; accessToken: string; refreshToken: string; }'.
+  Property 'getResponse' does not exist on type '{ userId: string; fullName: string; phoneNumber: string; role: Role; tokenVersion: number; mustChangePassword: boolean; accessToken: string; refreshToken: string; }'.
+test/auth-lockout-recovery.spec.ts(200,63): error TS2339: Property 'getResponse' does not exist on type 'HttpException | { userId: string; fullName: string; phoneNumber: string; role: Role; tokenVersion: number; mustChangePassword: boolean; accessToken: string; refreshToken: string; }'.
+  Property 'getResponse' does not exist on type '{ userId: string; fullName: string; phoneNumber: string; role: Role; tokenVersion: number; mustChangePassword: boolean; accessToken: string; refreshToken: string; }'.
+test/auth-rate-limit.spec.ts(162,51): error TS2345: Argument of type '{ fullName: string; phoneNumber: string; password: string; }' is not assignable to parameter of type 'RegisterDto'.
+  Type '{ fullName: string; phoneNumber: string; password: string; }' is missing the following properties from type 'RegisterDto': email, role
+test/auth-rate-limit.spec.ts(169,68): error TS2353: Object literal may only specify known properties, and 'password' does not exist in type 'RegisterDto'.
+test/auth-rate-limit.spec.ts(191,49): error TS2345: Argument of type '{ phoneNumber: string; }' is not assignable to parameter of type 'SendOtpDto'.
+  Property 'purpose' is missing in type '{ phoneNumber: string; }' but required in type 'SendOtpDto'.
+test/auth-rate-limit.spec.ts(197,38): error TS2345: Argument of type '{ phoneNumber: string; }' is not assignable to parameter of type 'SendOtpDto'.
+  Property 'purpose' is missing in type '{ phoneNumber: string; }' but required in type 'SendOtpDto'.
+test/auth-rate-limit.spec.ts(215,50): error TS2345: Argument of type '{ phoneNumber: string; }' is not assignable to parameter of type 'SendOtpDto'.
+  Property 'purpose' is missing in type '{ phoneNumber: string; }' but required in type 'SendOtpDto'.
+test/auth-rate-limit.spec.ts(222,38): error TS2345: Argument of type '{ phoneNumber: string; }' is not assignable to parameter of type 'SendOtpDto'.
+  Property 'purpose' is missing in type '{ phoneNumber: string; }' but required in type 'SendOtpDto'.
+test/auth-rate-limit.spec.ts(242,52): error TS2345: Argument of type '{ phoneNumber: string; otp: string; }' is not assignable to parameter of type 'VerifyOtpDto'.
+  Property 'purpose' is missing in type '{ phoneNumber: string; otp: string; }' but required in type 'VerifyOtpDto'.
+test/auth-rate-limit.spec.ts(248,40): error TS2345: Argument of type '{ phoneNumber: string; otp: string; }' is not assignable to parameter of type 'VerifyOtpDto'.
+  Property 'purpose' is missing in type '{ phoneNumber: string; otp: string; }' but required in type 'VerifyOtpDto'.
+test/be-022-auth.spec.ts(2,29): error TS2307: Cannot find module '../src/modules/auth/auth.service' or its corresponding type declarations.
+test/be-022-auth.spec.ts(3,30): error TS2307: Cannot find module '../src/modules/users/users.service' or its corresponding type declarations.
+test/be-022-auth.spec.ts(4,28): error TS2307: Cannot find module '../src/modules/auth/otp.service' or its corresponding type declarations.
+test/be-022-auth.spec.ts(8,29): error TS2307: Cannot find module '../src/modules/auth/entities/user-session.entity' or its corresponding type declarations.
+test/be-022-auth.spec.ts(10,30): error TS2307: Cannot find module '../src/modules/email/email.service' or its corresponding type declarations.
+test/be-022-auth.spec.ts(11,29): error TS2307: Cannot find module '../src/common/esms/esms.service' or its corresponding type declarations.
+test/functional-api.spec.ts(178,32): error TS7006: Parameter 'cb' implicitly has an 'any' type.
+test/functional-api.spec.ts(181,11): error TS2722: Cannot invoke an object which is possibly 'undefined'.
+test/functional-api.spec.ts(517,45): error TS2345: Argument of type '{ phoneNumber: string; otp: string; }' is not assignable to parameter of type 'VerifyOtpDto'.
+  Property 'purpose' is missing in type '{ phoneNumber: string; otp: string; }' but required in type 'VerifyOtpDto'.
+test/functional-api.spec.ts(776,41): error TS2554: Expected 2 arguments, but got 1.
+test/functional-api.spec.ts(1077,115): error TS2339: Property 'ACTIVE' does not exist on type 'typeof DeviceStatus'.
+test/functional-api.spec.ts(1078,115): error TS2339: Property 'INACTIVE' does not exist on type 'typeof DeviceStatus'.
+test/functional-api.spec.ts(1095,30): error TS2339: Property 'INACTIVE' does not exist on type 'typeof DeviceStatus'.
+test/functional-api.spec.ts(1100,30): error TS2339: Property 'ACTIVE' does not exist on type 'typeof DeviceStatus'.
+test/functional-api.spec.ts(1104,49): error TS2339: Property 'ACTIVE' does not exist on type 'typeof DeviceStatus'.
+test/functional-api.spec.ts(1105,87): error TS2339: Property 'ACTIVE' does not exist on type 'typeof DeviceStatus'.
+test/functional-api.spec.ts(1195,49): error TS2554: Expected 2 arguments, but got 1.
+test/p0-3-auth-hardening.spec.ts(290,18): error TS2339: Property 'otp' does not exist on type '{ message: string; phoneNumber?: string | undefined; email?: string | undefined; expiresIn: string; }'.
+test/p0-3-auth-hardening.spec.ts(326,18): error TS2339: Property 'otp' does not exist on type '{ message: string; phoneNumber?: string | undefined; email?: string | undefined; expiresIn: string; }'.

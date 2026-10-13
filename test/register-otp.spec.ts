@@ -87,7 +87,7 @@ describe('MANAGER ONBOARDING REGISTRATION SUITE', () => {
       fullName: 'Tran Van Staff',
       phoneNumber: '0987654321',
       email: 'staff@example.com',
-      role: Role.TECHNICIAN,
+      role: Role.FARMER,
     };
 
     const res = await authService.register(registerDto);
@@ -101,7 +101,7 @@ describe('MANAGER ONBOARDING REGISTRATION SUITE', () => {
     expect(res.fullName).toBe('Tran Van Staff');
     expect(res.phoneNumber).toBe('0987654321');
     expect(res.email).toBe('staff@example.com');
-    expect(res.role).toBe(Role.TECHNICIAN);
+    expect(res.role).toBe(Role.FARMER);
 
     // 2. Không trả access/refresh token hoặc password trong response
     expect((res as any).accessToken).toBeUndefined();
@@ -113,7 +113,7 @@ describe('MANAGER ONBOARDING REGISTRATION SUITE', () => {
     expect(usersService.createUser).toHaveBeenCalledTimes(1);
     const createdArgs = usersService.createUser.mock.calls[0][0];
     expect(createdArgs.mustChangePassword).toBe(true);
-    expect(createdArgs.role).toBe(Role.TECHNICIAN);
+    expect(createdArgs.role).toBe(Role.FARMER);
     expect(createdArgs.passwordHash).toBeDefined();
 
     // 4. Email chứa plainPassword được gửi
@@ -219,7 +219,7 @@ describe('MANAGER ONBOARDING REGISTRATION SUITE', () => {
       fullName: 'Email Fail User',
       phoneNumber: '0933333333',
       email: 'failmail@example.com',
-      role: Role.TECHNICIAN,
+      role: Role.FARMER,
     };
 
     await expect(authService.register(registerDto)).rejects.toThrow(
@@ -236,7 +236,7 @@ describe('MANAGER ONBOARDING REGISTRATION SUITE', () => {
       fullName: 'DB Error User',
       phoneNumber: '0944444444',
       email: 'dberror@example.com',
-      role: Role.TECHNICIAN,
+      role: Role.FARMER,
     };
 
     await expect(authService.register(registerDto)).rejects.toThrow(

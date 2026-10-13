@@ -125,8 +125,8 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
         }
         if (!globalLock.__txLock) globalLock.__txLock = Promise.resolve();
         const currentLock = globalLock.__txLock;
-        let releaseLock;
-        globalLock.__txLock = new Promise((resolve) => { releaseLock = resolve; });
+        let releaseLock: () => void = () => {};
+        globalLock.__txLock = new Promise<void>((resolve) => { releaseLock = resolve; });
         await currentLock;
         try {
           const user = usersStore.get(userId);
@@ -175,7 +175,8 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
             })),
             findOne: vi.fn(async (entity, options) => usersStore.get(options.where.userId)),
           };
-          const afterCommit = (cb) => cb();
+          const afterCommit = (cb?: () => void | Promise<void>) =>
+            cb ? Promise.resolve(cb()) : Promise.resolve();
           return await operation(user, manager, afterCommit);
         } finally {
           releaseLock();
@@ -514,9 +515,13 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       const phone = getNextPhone();
       await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
-      await expect(authController.verifyOtp({ phoneNumber: phone, otp: '000000' })).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        authController.verifyOtp({
+          phoneNumber: phone,
+          otp: '000000',
+          purpose: OtpPurpose.REGISTER,
+        }),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('POST /auth/register -> Valid registration creates a user and sends the initial password', async () => {
@@ -773,12 +778,21 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
     });
 
     it('POST /users -> Manager creates user successfully', async () => {
-      const res = await usersController.createUser({
-        fullName: 'Created by Manager',
-        phoneNumber: '0908887777',
-        password: 'Password123!',
-        role: Role.FARMER,
+      usersStore.set(MANAGER_ID, {
+        userId: MANAGER_ID,
+        role: Role.MANAGER,
+        isActive: true,
+        isLocked: false,
       });
+      const res = await usersController.createUser(
+        {
+          fullName: 'Created by Manager',
+          phoneNumber: '0908887777',
+          password: 'Password123!',
+          role: Role.FARMER,
+        },
+        MANAGER_ID,
+      );
 
       expect(res.message).toBeDefined();
       expect(res.user.fullName).toBe('Created by Manager');
@@ -1074,8 +1088,8 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       const userId = 'farmer-dev-3';
       const pond = { pondId: 'pond-dev-3', userId, pondName: 'Ao Dev 3' };
       pondsStore.push(pond);
-      devicesStore.push({ deviceId: 'dev-1', pondId: pond.pondId, pond, deviceName: 'Dev 1', status: DeviceStatus.ACTIVE });
-      devicesStore.push({ deviceId: 'dev-2', pondId: pond.pondId, pond, deviceName: 'Dev 2', status: DeviceStatus.INACTIVE });
+      devicesStore.push({ deviceId: 'dev-1', pondId: pond.pondId, pond, deviceName: 'Dev 1', status: DeviceStatus.ONLINE });
+      devicesStore.push({ deviceId: 'dev-2', pondId: pond.pondId, pond, deviceName: 'Dev 2', status: DeviceStatus.OFFLINE });
 
       const res = await devicesController.findAllDevices(userId, Role.FARMER, { page: 1, limit: 10 });
       expect(res.total).toBe(2);
@@ -1092,17 +1106,17 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
         pondId: pond.pondId,
         pond,
         deviceName: 'Old Node Name',
-        status: DeviceStatus.INACTIVE,
+        status: DeviceStatus.OFFLINE,
       });
 
       const res = await devicesController.updateDevice(devId, userId, Role.FARMER, {
         deviceName: 'New Node Name',
-        status: DeviceStatus.ACTIVE,
+        status: DeviceStatus.ONLINE,
       });
       expect(res.message).toBeDefined();
       expect(res.data.deviceName).toBe('New Node Name');
-      expect(res.data.status).toBe(DeviceStatus.ACTIVE);
-      expect(devicesStore.find((d) => d.deviceId === devId).status).toBe(DeviceStatus.ACTIVE);
+      expect(res.data.status).toBe(DeviceStatus.ONLINE);
+      expect(devicesStore.find((d) => d.deviceId === devId).status).toBe(DeviceStatus.ONLINE);
     });
 
     it('DELETE /devices/:id -> Deletes IoT device', async () => {
@@ -1190,14 +1204,23 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
     });
 
     it('Flow B: Manager / Admin Lifecycle (Manager Creates User -> Assigns Device to Pond -> Reads System Overview)', async () => {
-      // 1. Manager creates a new technician / farmer user
-      const workerPhone = getNextPhone();
-      const createdUser = await usersController.createUser({
-        fullName: 'Nguyen Van Ky Thuat',
-        phoneNumber: workerPhone,
-        password: 'WorkerPassword123!',
-        role: Role.FARMER,
+      // 1. Manager creates a new FARMER / farmer user
+      usersStore.set(MANAGER_ID, {
+        userId: MANAGER_ID,
+        role: Role.MANAGER,
+        isActive: true,
+        isLocked: false,
       });
+      const workerPhone = getNextPhone();
+      const createdUser = await usersController.createUser(
+        {
+          fullName: 'Nguyen Van Ky Thuat',
+          phoneNumber: workerPhone,
+          password: 'WorkerPassword123!',
+          role: Role.FARMER,
+        },
+        MANAGER_ID,
+      );
       expect(createdUser.user).toBeDefined();
       const workerId = (createdUser.user as any).userId;
 

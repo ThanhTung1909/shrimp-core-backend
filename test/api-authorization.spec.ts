@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PondsService } from '../src/modules/ponds/ponds.service.js';
 import { PondsController } from '../src/modules/ponds/ponds.controller.js';
@@ -523,7 +523,7 @@ describe('API AUTHORIZATION & SECURITY AUDIT (PHASE 9)', () => {
 
     it('Farmer listing devices only receives devices attached to own ponds', async () => {
       const res = await devicesController.findAllDevices(FARMER_A, Role.FARMER, {} as any);
-      expect(res.data.every((d) => d.pond.userId === FARMER_A)).toBe(true);
+      expect(res.data.every((d) => d.pond !== null && d.pond.userId === FARMER_A)).toBe(true);
     });
   });
 
@@ -533,7 +533,7 @@ describe('API AUTHORIZATION & SECURITY AUDIT (PHASE 9)', () => {
       const res = await pondsController.createPond(
         FARMER_A,
         Role.FARMER,
-        { pondName: 'New Pond', areaM2: 500, depthM: 1, userId: FARMER_B } as any,
+        { pondName: 'New Pond', areaM2: 500, depthM: 1, shrimpDensity: 50, userId: FARMER_B } as any,
       );
       expect(res.data.userId).toBe(FARMER_A);
       expect(res.data.userId).not.toBe(FARMER_B);
@@ -553,7 +553,7 @@ describe('API AUTHORIZATION & SECURITY AUDIT (PHASE 9)', () => {
       const res = await pondsController.createPond(
         MANAGER_USER,
         Role.MANAGER,
-        { pondName: 'Manager Created', areaM2: 500, depthM: 1, userId: FARMER_B },
+        { pondName: 'Manager Created', areaM2: 500, depthM: 1, shrimpDensity: 50, userId: FARMER_B },
       );
       expect(res.data.userId).toBe(FARMER_B);
     });

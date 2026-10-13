@@ -287,7 +287,7 @@ describe('P0-3 AUTH HARDENING TEST SUITE: Password Reset & Access Token Blacklis
       expect(res.message).toBe('Nếu số điện thoại hợp lệ, mã OTP đã được gửi');
       expect(res.phoneNumber).toBe(phone);
       expect(res.expiresIn).toBe('5 phút');
-      expect(res.otp).toBeUndefined();
+      expect(res).not.toHaveProperty('otp');
 
       // EsmsService was called
       expect(esmsService.sendSMS).toHaveBeenCalledWith(phone, expect.any(String));
@@ -323,7 +323,7 @@ describe('P0-3 AUTH HARDENING TEST SUITE: Password Reset & Access Token Blacklis
       });
 
       const res = await authController.forgotPassword({ phoneNumber: phone });
-      expect(res.otp).toBeUndefined();
+      expect(res).not.toHaveProperty('otp');
       const sentOtp = esmsService.sendSMS.mock.calls[0][1];
 
       // Attempting to verify with REGISTER purpose should FAIL (purpose isolation)
