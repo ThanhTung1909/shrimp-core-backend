@@ -167,6 +167,10 @@ export class AuthController {
   @Public()
   @Post('forgot-password')
   @ApiOperation({ summary: 'Gửi OTP đặt lại mật khẩu qua SMS hoặc Email (chỉ một định danh)' })
+  @ApiResponse({ status: 201, description: 'Gửi mã OTP đặt lại mật khẩu thành công' })
+  @ApiResponse({ status: 400, description: 'Định danh không hợp lệ hoặc thiếu thông tin' })
+  @ApiResponse({ status: 404, description: 'Tài khoản không tồn tại' })
+  @ApiResponse({ status: 429, description: 'Quá nhiều yêu cầu, vui lòng thử lại sau!' })
   async forgotPassword(
     @Body() dto: ForgotPasswordDto,
     @Ip() ip?: string,
