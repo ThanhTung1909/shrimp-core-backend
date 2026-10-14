@@ -22,7 +22,7 @@ export class AlertsService {
   constructor(
     @InjectRepository(Alert)
     private readonly alertRepo: Repository<Alert>,
-  ) {}
+  ) { }
 
   async createThresholdAlert(input: CreateThresholdAlertInput): Promise<Alert> {
     const boundary = input.direction === 'LOW' ? input.minValue : input.maxValue;
@@ -57,7 +57,7 @@ export class AlertsService {
       qb.andWhere('alert.status = :status', { status });
     }
 
-    qb.orderBy('alert.created_at', 'DESC');
+    qb.orderBy('alert.createdAt', 'DESC');
     qb.skip(skip);
     qb.take(limit);
 
