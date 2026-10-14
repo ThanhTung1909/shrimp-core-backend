@@ -56,11 +56,9 @@ describe('TelemetryService', () => {
       const result = await service.processTelemetryPayload(dto);
 
       expect(result).toBeNull();
-      expect(mockDeviceRepo.findOne).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { deviceId: dto.deviceId },
-        }),
-      );
+      expect(mockDeviceRepo.findOne).toHaveBeenCalledWith({
+        where: { deviceId: dto.deviceId },
+      });
       expect(mockTelemetryRepo.save).not.toHaveBeenCalled();
       expect(mockDeviceRepo.update).not.toHaveBeenCalled();
     });

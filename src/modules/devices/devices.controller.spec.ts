@@ -34,7 +34,7 @@ describe('DevicesController authorization metadata', () => {
   const getHandlers = [
     ['GET collection', controller.findAllDevices],
     ['GET detail', controller.findDeviceById],
-  ] as const;
+  ];
 
   it.each(mutationHandlers)(
     '%s metadata yêu cầu chính xác ADMIN và MANAGER',
