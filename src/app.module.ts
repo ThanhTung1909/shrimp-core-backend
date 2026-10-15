@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TelemetryModule } from './modules/telemetry/telemetry.module.js';
 import { UsersModule } from './modules/users/users.module.js';
@@ -16,6 +16,7 @@ import { RedisThrottlerStorage } from './common/redis/redis-throttler.storage.js
 
 import { ScheduleModule } from '@nestjs/schedule';
 import { EsmsModule } from './common/esms/esms.module.js';
+import { HttpThrottlerGuard } from './common/guards/http-throttler.guard.js';
 
 @Module({
   imports: [
@@ -57,7 +58,7 @@ import { EsmsModule } from './common/esms/esms.module.js';
 
     // Module lưu trữ dữ liệu in-memory Redis (Global)
     RedisModule,
-    
+
     // Module SMS (Global)
     EsmsModule,
 
@@ -75,8 +76,8 @@ import { EsmsModule } from './common/esms/esms.module.js';
   providers: [
     {
       provide: APP_GUARD,
-      useClass: ThrottlerGuard,
+      useClass: HttpThrottlerGuard,
     },
   ],
 })
-export class AppModule {}
+export class AppModule { }

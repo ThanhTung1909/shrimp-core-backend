@@ -21,7 +21,15 @@ import { RateLimitService } from './common/redis/rate-limit.service.js';
  */
 export function configureHttpApp(app: INestApplication): void {
   const expressApp = app as NestExpressApplication;
-  expressApp.set('trust proxy', 1);
+  const trustedProxyCidrs = (process.env.TRUSTED_PROXY_CIDRS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  expressApp.set(
+    'trust proxy',
+    trustedProxyCidrs.length > 0 ? trustedProxyCidrs : false,
+  );
 
   const reflector = app.get(Reflector);
   const rateLimitService = app.get(RateLimitService);

@@ -136,19 +136,26 @@ describe('P0-4 HTTP security hardening', () => {
     }
   }, 20_000);
 
-  it('uses the trusted proxy client identity consistently', async () => {
+  it('does not allow X-Forwarded-For spoofing to bypass REST rate limits', async () => {
     const app = await createTestApp();
+
     try {
       for (let index = 0; index < 60; index += 1) {
         await request(app.getHttpServer())
           .get('/p0-4-rest')
-          .set('X-Forwarded-For', '198.51.100.18')
+          .set(
+            'X-Forwarded-For',
+            `198.51.100.${(index % 200) + 1}`,
+          )
           .expect(200);
       }
-      await request(app.getHttpServer())
+
+      const blocked = await request(app.getHttpServer())
         .get('/p0-4-rest')
-        .set('X-Forwarded-For', '198.51.100.18')
+        .set('X-Forwarded-For', '203.0.113.250')
         .expect(429);
+
+      expect(blocked.headers['retry-after']).toBeDefined();
     } finally {
       await app.close();
     }
