@@ -4,18 +4,27 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 
 import { AllExceptionsFilter } from './common/filters/http-exception.filter.js';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor.js';
+import { createSwaggerRateLimitMiddleware } from './common/middleware/swagger-rate-limit.middleware.js';
+import { RateLimitService } from './common/redis/rate-limit.service.js';
 
 /**
- * Configures the HTTP application before routes are registered. This is kept
- * separate from bootstrap so the production HTTP security configuration can be
- * exercised without starting the MQTT client or listening on a TCP port.
+ * Applies HTTP middleware before Nest starts listening for requests.
+ *
+ * The upstream proxy must be the only network path to this application. With
+ * `trust proxy` set to 1, Express trusts exactly one proxy hop and derives
+ * `req.ip` from the forwarded client address used by ThrottlerGuard.
  */
 export function configureHttpApp(app: INestApplication): void {
+  const expressApp = app as NestExpressApplication;
+  expressApp.set('trust proxy', 1);
+
   const reflector = app.get(Reflector);
+  const rateLimitService = app.get(RateLimitService);
 
   app.use(
     helmet({
@@ -28,6 +37,8 @@ export function configureHttpApp(app: INestApplication): void {
           frameAncestors: ["'self'"],
           imgSrc: ["'self'", 'data:'],
           objectSrc: ["'none'"],
+          // Required by the bundled Swagger UI. Prefer nonces/hashes if a
+          // browser-facing UI is added under this same origin.
           scriptSrc: ["'self'", "'unsafe-inline'"],
           scriptSrcAttr: ["'none'"],
           styleSrc: ["'self'", "'unsafe-inline'", 'https:'],
@@ -36,19 +47,18 @@ export function configureHttpApp(app: INestApplication): void {
     }),
   );
 
-  // Kích hoạt CORS cho các client khác gọi API
+  const swaggerRateLimitMiddleware = createSwaggerRateLimitMiddleware(
+    rateLimitService,
+  );
+  app.use('/api/docs', swaggerRateLimitMiddleware);
+  app.use('/api/docs-json', swaggerRateLimitMiddleware);
+
   app.enableCors();
-
-  // Kích hoạt Global Exception Filter để chuẩn hóa toàn bộ lỗi (HTTP, TypeORM, Runtime)
   app.useGlobalFilters(new AllExceptionsFilter());
-
-  // Kích hoạt Global Interceptors: ClassSerializerInterceptor và TransformInterceptor
   app.useGlobalInterceptors(
     new ClassSerializerInterceptor(reflector),
     new TransformInterceptor(reflector),
   );
-
-  // Kích hoạt ValidationPipe toàn cục
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

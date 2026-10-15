@@ -11,6 +11,8 @@ import { AlertsModule } from './modules/alerts/alerts.module.js';
 import { PredictionsModule } from './modules/predictions/predictions.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { RedisModule } from './common/redis/redis.module.js';
+import { RedisService } from './common/redis/redis.service.js';
+import { RedisThrottlerStorage } from './common/redis/redis-throttler.storage.js';
 
 import { ScheduleModule } from '@nestjs/schedule';
 import { EsmsModule } from './common/esms/esms.module.js';
@@ -19,12 +21,19 @@ import { EsmsModule } from './common/esms/esms.module.js';
   imports: [
     // Load biến môi trường toàn cục
     ConfigModule.forRoot({ isGlobal: true }),
-    ThrottlerModule.forRoot([
-      {
-        ttl: 60_000,
-        limit: 60,
-      },
-    ]),
+    ThrottlerModule.forRootAsync({
+      imports: [RedisModule],
+      inject: [RedisService],
+      useFactory: (redisService: RedisService) => ({
+        throttlers: [
+          {
+            ttl: 60_000,
+            limit: 60,
+          },
+        ],
+        storage: new RedisThrottlerStorage(redisService),
+      }),
+    }),
     ScheduleModule.forRoot(),
 
     // Kết nối CSDL TimescaleDB

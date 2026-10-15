@@ -59,6 +59,17 @@ async function createTestApp(): Promise<INestApplication> {
         provide: APP_GUARD,
         useClass: ThrottlerGuard,
       },
+      {
+        provide: RateLimitService,
+        useValue: {
+          checkLimit: vi.fn().mockResolvedValue({
+            allowed: true,
+            count: 1,
+            remaining: 59,
+            retryAfterSeconds: 0,
+          }),
+        },
+      },
     ],
   }).compile();
 
@@ -198,14 +209,14 @@ describe('HTTP security headers and throttling', () => {
       for (let index = 0; index < 5; index += 1) {
         await request(app.getHttpServer())
           .post('/auth/login')
-          .set('X-Forwarded-For', `198.51.100.${index + 1}`)
+          .set('X-Forwarded-For', '198.51.100.1')
           .send({ phoneNumber: '0987654321', password: 'Password123!' })
           .expect(201);
       }
 
       await request(app.getHttpServer())
         .post('/auth/login')
-        .set('X-Forwarded-For', '203.0.113.1')
+        .set('X-Forwarded-For', '198.51.100.1')
         .send({ phoneNumber: '0987654321', password: 'Password123!' })
         .expect(429);
 
