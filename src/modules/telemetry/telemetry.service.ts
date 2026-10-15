@@ -95,7 +95,20 @@ export class TelemetryService implements OnModuleInit {
    * 3. Nếu hợp lệ: Lưu dữ liệu vào TimescaleDB và cập nhật thiết bị sang ONLINE + lastActiveAt
    */
   async processTelemetryPayload(dto: CreateTelemetryDto): Promise<TelemetryData | null> {
-    const device = await this.deviceRepo.findOne({ where: { deviceId: dto.deviceId } });
+    const device = await this.deviceRepo.findOne({
+      where: { deviceId: dto.deviceId },
+      relations: { pond: true },
+      select: {
+        deviceId: true,
+        pondId: true,
+        status: true,
+        lastActiveAt: true,
+        pond: {
+          pondId: true,
+          userId: true,
+        },
+      },
+    });
 
     if (!device) {
       this.logger.warn(
@@ -129,6 +142,19 @@ export class TelemetryService implements OnModuleInit {
     this.logger.log(
       `[Telemetry] Đã lưu dữ liệu cảm biến cho thiết bị ${dto.deviceId} vào TimescaleDB.`,
     );
+
+    try {
+      await this.redisService.publish(
+        'telemetry:new',
+        JSON.stringify({
+          pondId: device.pondId,
+          userId: device.pond?.userId || null,
+          data: savedRecord,
+        }),
+      );
+    } catch (err: any) {
+      this.logger.error(`[Redis Publish Error] Lỗi publish telemetry:new: ${err.message}`);
+    }
 
     await this.evaluateThresholds(device, dto);
 
@@ -237,7 +263,7 @@ export class TelemetryService implements OnModuleInit {
       );
       if (!cooldownSet) return;
 
-      await this.alertsService.createThresholdAlert({
+      const alert = await this.alertsService.createThresholdAlert({
         pondId: config.pondId,
         deviceId: device.deviceId,
         metricName: config.metricName,
@@ -246,6 +272,22 @@ export class TelemetryService implements OnModuleInit {
         maxValue: Number(config.maxValue),
         direction,
       });
+
+      try {
+        await this.redisService.publish(
+          'alert:triggered',
+          JSON.stringify({
+            pondId: config.pondId,
+            userId: device.pond?.userId || null,
+            alert,
+          }),
+        );
+      } catch (error) {
+        this.logger.error(
+          '[Redis Publish Error] Lỗi publish alert:triggered cho threshold alert.',
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
     } catch (error) {
       if (cooldownSet) {
         try {
@@ -310,7 +352,21 @@ export class TelemetryService implements OnModuleInit {
   }
 
   async updateDeviceStatus(deviceId: string, status: DeviceStatus): Promise<Device | null> {
-    const device = await this.deviceRepo.findOne({ where: { deviceId } });
+    const device = await this.deviceRepo.findOne({
+      where: { deviceId },
+      relations: { pond: true },
+      select: {
+        deviceId: true,
+        deviceName: true,
+        pondId: true,
+        status: true,
+        lastActiveAt: true,
+        pond: {
+          pondId: true,
+          userId: true,
+        },
+      },
+    });
     if (!device) {
       return null;
     }
@@ -342,7 +398,20 @@ export class TelemetryService implements OnModuleInit {
           status: AlertStatus.ACTIVE,
           message: `Thiết bị ${device.deviceName || device.deviceId} mất kết nối mạng đột ngột hoặc quá hạn phản hồi`,
         });
-        await this.alertRepo.save(newAlert);
+        const savedAlert = await this.alertRepo.save(newAlert);
+
+        try {
+          await this.redisService.publish(
+            'alert:triggered',
+            JSON.stringify({
+              pondId: device.pondId,
+              userId: device.pond?.userId || null,
+              alert: savedAlert,
+            }),
+          );
+        } catch (err: any) {
+          this.logger.error(`[Redis Publish Error] Lỗi publish alert:triggered: ${err.message}`);
+        }
       }
     }
 

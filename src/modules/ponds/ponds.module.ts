@@ -10,6 +10,6 @@ import { PondsService } from './ponds.service.js';
   imports: [TypeOrmModule.forFeature([Pond, ThresholdConfig, ManualTestLog])],
   controllers: [PondsController],
   providers: [PondsService],
-  exports: [TypeOrmModule],
+  exports: [PondsService, TypeOrmModule],
 })
 export class PondsModule {}
