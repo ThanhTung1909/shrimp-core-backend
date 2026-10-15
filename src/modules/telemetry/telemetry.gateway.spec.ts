@@ -186,6 +186,16 @@ describe('TelemetryGateway', () => {
     expect(socket.join).not.toHaveBeenCalled();
   });
 
+  it('rejects a pond subscription without pondId', async () => {
+    const socket = client(); socket.data.user = user;
+
+    await expect(
+      gateway.handleSubscribePond(socket as any, { pondId: '' }),
+    ).resolves.toEqual({ status: 'error', message: 'Truyền thiếu pondId' });
+    expect(pondsService.findPondById).not.toHaveBeenCalled();
+    expect(socket.join).not.toHaveBeenCalled();
+  });
+
   it('authorizes rapid subscribe, unsubscribe, and leave events', async () => {
     const socket = client(); socket.data.user = user;
     const results = await Promise.all([

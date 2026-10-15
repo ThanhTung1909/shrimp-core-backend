@@ -92,7 +92,7 @@ export class TelemetryService implements OnModuleInit {
    * Xử lý gói tin dữ liệu cảm biến từ MQTT:
    * 1. Kiểm tra thiết bị trong CSDL (Device)
    * 2. Nếu không tìm thấy: Ghi Security Warning Log và từ chối lưu
-   * 3. Nếu hợp lệ: Lưu dữ liệu vào TimescaleDB và cập nhật thiết bị sang ONLINE + lastActiveAt
+   * 3. Nếu hợp lệ: Lưu TimescaleDB, cập nhật thiết bị, publish realtime và đánh giá threshold
    */
   async processTelemetryPayload(dto: CreateTelemetryDto): Promise<TelemetryData | null> {
     const device = await this.deviceRepo.findOne({

@@ -333,12 +333,9 @@ export class TelemetryGateway
   }
 
   /**
-   * Phát sự kiện telemetry:new xuống các room Socket.io
+   * Phát sự kiện telemetry:new xuống các room Socket.IO.
+   * Một client thuộc nhiều room chỉ nhận một event.
    */
-  /**
- * Phát sự kiện telemetry:new xuống các room Socket.IO.
- * Một client thuộc nhiều room chỉ nhận một event.
- */
   broadcastTelemetry(payload: TelemetryEventPayload) {
     const { pondId, userId, data } = payload;
 
