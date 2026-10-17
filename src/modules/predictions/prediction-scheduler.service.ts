@@ -25,16 +25,18 @@ export class PredictionSchedulerService implements OnModuleInit {
   async setupPeriodicPredictionsJob() {
     const repeatableJobId = 'periodic-active-ponds-prediction';
 
-    // Dọn các repeatable job cũ nếu có để tránh trùng lặp
+    // Kiểm tra xem job lặp lại đã được đăng ký trong Redis chưa để tránh race condition khi scale nhiều instances
     try {
       const repeatableJobs = await this.predictionQueue.getRepeatableJobs();
-      for (const job of repeatableJobs) {
-        if (job.name === PREDICTION_JOBS.CRON_ACTIVE_PONDS) {
-          await this.predictionQueue.removeRepeatableByKey(job.key);
-        }
+      const alreadyScheduled = repeatableJobs.some(
+        (job) => job.name === PREDICTION_JOBS.CRON_ACTIVE_PONDS && job.pattern === '*/30 * * * *',
+      );
+      if (alreadyScheduled) {
+        this.logger.log('⏰ [Scheduler] Repeatable job dự báo AI đã sẵn sàng trong Redis, bỏ qua đăng ký trùng lặp.');
+        return;
       }
     } catch (err: any) {
-      this.logger.warn(`[Scheduler] Không thể dọn dẹp repeatable job cũ: ${err.message}`);
+      this.logger.warn(`[Scheduler] Không thể kiểm tra repeatable jobs: ${err.message}`);
     }
 
     // Đăng ký lặp lại mỗi 30 phút (Cron pattern: */30 * * * *)

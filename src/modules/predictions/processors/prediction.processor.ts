@@ -9,7 +9,7 @@ import {
 } from '../../../common/queues/queue.constants.js';
 import { PredictionsService } from '../predictions.service.js';
 
-@Processor(QUEUE_PREDICTIONS)
+@Processor(QUEUE_PREDICTIONS, { concurrency: 2 })
 export class PredictionQueueProcessor extends WorkerHost {
   private readonly logger = new Logger(PredictionQueueProcessor.name);
 
@@ -56,16 +56,31 @@ export class PredictionQueueProcessor extends WorkerHost {
 
     this.logger.log(`[Prediction Worker] Tìm thấy ${activePondIds.length} ao nuôi đang active.`);
 
-    for (const pondId of activePondIds) {
-      await this.predictionQueue.add(
-        PREDICTION_JOBS.TRIGGER_POND,
-        { pondId },
-        {
-          attempts: 2,
-          backoff: { type: 'fixed', delay: 5000 },
-          removeOnComplete: true,
-        },
-      );
+    if (activePondIds.length > 0) {
+      if (typeof this.predictionQueue.addBulk === 'function') {
+        const jobs = activePondIds.map((pondId) => ({
+          name: PREDICTION_JOBS.TRIGGER_POND,
+          data: { pondId },
+          opts: {
+            attempts: 2,
+            backoff: { type: 'fixed' as const, delay: 5000 },
+            removeOnComplete: true,
+          },
+        }));
+        await this.predictionQueue.addBulk(jobs);
+      } else {
+        for (const pondId of activePondIds) {
+          await this.predictionQueue.add(
+            PREDICTION_JOBS.TRIGGER_POND,
+            { pondId },
+            {
+              attempts: 2,
+              backoff: { type: 'fixed', delay: 5000 },
+              removeOnComplete: true,
+            },
+          );
+        }
+      }
     }
 
     return { triggeredCount: activePondIds.length };

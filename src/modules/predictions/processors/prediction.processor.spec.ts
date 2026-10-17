@@ -83,5 +83,23 @@ describe('PredictionQueueProcessor', () => {
       );
       expect(result).toEqual({ triggeredCount: 2 });
     });
+
+    it('nên sử dụng addBulk khi queue hỗ trợ addBulk để tối ưu batch', async () => {
+      mockQueue.addBulk = vi.fn().mockResolvedValue([]);
+      const mockJob: any = {
+        id: 'cron-job-2',
+        name: PREDICTION_JOBS.CRON_ACTIVE_PONDS,
+        data: {},
+      };
+
+      const result = await processor.process(mockJob);
+      expect(mockQueue.addBulk).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ name: PREDICTION_JOBS.TRIGGER_POND, data: { pondId: 'pond-1' } }),
+          expect.objectContaining({ name: PREDICTION_JOBS.TRIGGER_POND, data: { pondId: 'pond-2' } }),
+        ]),
+      );
+      expect(result).toEqual({ triggeredCount: 2 });
+    });
   });
 });

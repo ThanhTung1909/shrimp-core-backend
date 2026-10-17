@@ -168,6 +168,60 @@ export class TelemetryService implements OnModuleInit {
     return normalized;
   }
 
+  async getThresholdConfigsForPond(pondId: string): Promise<ThresholdConfig[]> {
+    const cacheKey = `cache:thresholds:${pondId}`;
+    if (this.redisService && typeof this.redisService.get === 'function') {
+      try {
+        const cached = await this.redisService.get(cacheKey);
+        if (cached) {
+          return JSON.parse(cached);
+        }
+      } catch (err: any) {
+        this.logger.warn(`[Redis Cache Error] Không thể đọc cache ${cacheKey}: ${err.message}`);
+      }
+    }
+
+    const configs = await this.thresholdConfigRepo.find({
+      where: { pondId, isActive: true },
+    });
+
+    if (this.redisService && typeof this.redisService.set === 'function') {
+      try {
+        await this.redisService.set(cacheKey, JSON.stringify(configs), 15 * 60);
+      } catch (err: any) {
+        this.logger.warn(`[Redis Cache Error] Không thể ghi cache ${cacheKey}: ${err.message}`);
+      }
+    }
+
+    return configs;
+  }
+
+  determineAlertLevel(
+    normalizedMetric: string,
+    value: number,
+    minValue: number,
+    maxValue: number,
+    direction: 'LOW' | 'HIGH',
+  ): AlertLevel {
+    const boundary = direction === 'LOW' ? minValue : maxValue;
+    const deviation = Math.abs(value - boundary);
+    const deviationPercent = boundary !== 0 ? deviation / boundary : 0;
+
+    // Ngưỡng nguy cấp ngành tôm:
+    // 1. Oxy hòa tan DO < 3.0 mg/L (tôm ngạt khí)
+    // 2. pH < 6.8 hoặc pH > 9.2 (sốc môi trường nặng)
+    // 3. Hoặc mức lệch ngưỡng >= 25%
+    if (
+      (normalizedMetric === 'dissolvedoxygen' && value < 3.0) ||
+      (normalizedMetric === 'ph' && (value < 6.8 || value > 9.2)) ||
+      deviationPercent >= 0.25
+    ) {
+      return AlertLevel.CRITICAL;
+    }
+
+    return AlertLevel.WARNING;
+  }
+
   async evaluateThresholds(
     deviceOrId: Device | string,
     dto: CreateTelemetryDto,
@@ -187,9 +241,7 @@ export class TelemetryService implements OnModuleInit {
     }
 
     try {
-      const configs = await this.thresholdConfigRepo.find({
-        where: { pondId: device.pondId, isActive: true },
-      });
+      const configs = await this.getThresholdConfigsForPond(device.pondId);
       const configsByMetric = new Map<string, ThresholdConfig>();
       for (const config of configs) {
         if (!config.isActive) continue;
@@ -253,7 +305,16 @@ export class TelemetryService implements OnModuleInit {
     direction: 'LOW' | 'HIGH',
   ): Promise<void> {
     const cooldownKey = `alert:cooldown:${config.pondId}:${device.deviceId}:${normalizedMetric}:${direction}`;
+    const alertLevel = this.determineAlertLevel(
+      normalizedMetric,
+      triggeredValue,
+      Number(config.minValue),
+      Number(config.maxValue),
+      direction,
+    );
+
     let cooldownSet = false;
+    let isEscalated = false;
 
     try {
       cooldownSet = await this.redisService.setIfAbsent(
@@ -261,7 +322,36 @@ export class TelemetryService implements OnModuleInit {
         '1',
         THRESHOLD_COOLDOWN_SECONDS,
       );
-      if (!cooldownSet) return;
+
+      // Nếu cooldown đã tồn tại (setIfAbsent trả về false), kiểm tra xem có Delta Escalation lên CRITICAL không
+      if (!cooldownSet) {
+        if (typeof this.redisService.get === 'function') {
+          try {
+            const existingLevel = await this.redisService.get(`${cooldownKey}:level`);
+            if (alertLevel === AlertLevel.CRITICAL && existingLevel !== AlertLevel.CRITICAL) {
+              isEscalated = true;
+              this.logger.warn(
+                `[Alert Engine Escalation] Phá vỡ cooldown cho ao ${config.pondId || device.pondId}, thiết bị ${device.deviceId}, chỉ số ${config.metricName}: Thang đo nâng lên CRITICAL (giá trị: ${triggeredValue}).`,
+              );
+              if (typeof this.redisService.set === 'function') {
+                await this.redisService.set(`${cooldownKey}:level`, AlertLevel.CRITICAL, THRESHOLD_COOLDOWN_SECONDS);
+              }
+            }
+          } catch {
+            // Safe ignore
+          }
+        }
+
+        if (!isEscalated) return;
+      } else {
+        if (typeof this.redisService.set === 'function') {
+          try {
+            await this.redisService.set(`${cooldownKey}:level`, alertLevel, THRESHOLD_COOLDOWN_SECONDS);
+          } catch {
+            // Safe ignore
+          }
+        }
+      }
 
       const alert = await this.alertsService.createThresholdAlert({
         pondId: config.pondId,
@@ -271,6 +361,7 @@ export class TelemetryService implements OnModuleInit {
         minValue: Number(config.minValue),
         maxValue: Number(config.maxValue),
         direction,
+        alertLevel,
       });
 
       try {
@@ -289,7 +380,7 @@ export class TelemetryService implements OnModuleInit {
         );
       }
     } catch (error) {
-      if (cooldownSet) {
+      if (cooldownSet && !isEscalated) {
         try {
           await this.redisService.del(cooldownKey);
         } catch (cleanupError) {

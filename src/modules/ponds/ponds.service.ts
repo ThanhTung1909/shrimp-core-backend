@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
@@ -26,6 +27,7 @@ import { CreateManualTestLogDto } from './dto/create-manual-test-log.dto.js';
 import { UpdateManualTestLogDto } from './dto/update-manual-test-log.dto.js';
 import { FindManualTestLogsQueryDto } from './dto/find-manual-test-logs-query.dto.js';
 import { Role } from '../../common/enums/role.enum.js';
+import { RedisService } from '../../common/redis/redis.service.js';
 import {
   MessageOnlyResponse,
   PaginatedResponse,
@@ -42,7 +44,19 @@ export class PondsService {
     private readonly thresholdRepo: Repository<ThresholdConfig>,
     @InjectRepository(ManualTestLog)
     private readonly manualLogRepo: Repository<ManualTestLog>,
+    @Optional()
+    private readonly redisService?: RedisService,
   ) {}
+
+  private async invalidateThresholdCache(pondId: string): Promise<void> {
+    if (this.redisService && typeof this.redisService.del === 'function') {
+      try {
+        await this.redisService.del(`cache:thresholds:${pondId}`);
+      } catch {
+        // Safe ignore cache deletion error
+      }
+    }
+  }
 
   // ==========================================
   // 1. POND CRUD
@@ -247,7 +261,9 @@ export class PondsService {
       pondId,
     });
 
-    return await this.thresholdRepo.save(config);
+    const savedConfig = await this.thresholdRepo.save(config);
+    await this.invalidateThresholdCache(pondId);
+    return savedConfig;
   }
 
   async findThresholdsByPond(
@@ -338,7 +354,9 @@ export class PondsService {
     if (dto.maxValue !== undefined) config.maxValue = dto.maxValue;
     if (dto.isActive !== undefined) config.isActive = dto.isActive;
 
-    return await this.thresholdRepo.save(config);
+    const savedConfig = await this.thresholdRepo.save(config);
+    await this.invalidateThresholdCache(config.pondId);
+    return savedConfig;
   }
 
   async deleteThresholdConfig(
@@ -366,7 +384,9 @@ export class PondsService {
       throw new ForbiddenException('Bạn không có quyền xóa cấu hình này!');
     }
 
+    const pondId = config.pondId;
     await this.thresholdRepo.remove(config);
+    await this.invalidateThresholdCache(pondId);
     return { message: 'Xóa cấu hình ngưỡng thành công!' };
   }
 

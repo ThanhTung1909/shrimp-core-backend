@@ -849,4 +849,59 @@ describe('TelemetryService', () => {
       expect(mockDeviceRepo.save).toHaveBeenCalledWith(mockDevice);
     });
   });
+
+  describe('getThresholdConfigsForPond & Escalation', () => {
+    it('uses cached threshold configs from Redis if available', async () => {
+      mockRedisService.get = vi.fn().mockResolvedValue(JSON.stringify([{ metricName: 'pH', minValue: 7, maxValue: 8, isActive: true }]));
+      const result = await service.getThresholdConfigsForPond('pond-1');
+      expect(result).toHaveLength(1);
+      expect(mockThresholdConfigRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('queries DB and caches in Redis when cache misses', async () => {
+      mockRedisService.get = vi.fn().mockResolvedValue(null);
+      mockRedisService.set = vi.fn().mockResolvedValue('OK');
+      mockThresholdConfigRepo.find.mockResolvedValue([{ metricName: 'DO', minValue: 4, maxValue: 8, isActive: true }]);
+
+      const result = await service.getThresholdConfigsForPond('pond-1');
+      expect(result).toHaveLength(1);
+      expect(mockThresholdConfigRepo.find).toHaveBeenCalledWith({ where: { pondId: 'pond-1', isActive: true } });
+      expect(mockRedisService.set).toHaveBeenCalledWith('cache:thresholds:pond-1', expect.any(String), 900);
+    });
+
+    it('determines CRITICAL alert level for extreme breaches or DO < 3.0', () => {
+      expect(service.determineAlertLevel('dissolvedoxygen', 2.8, 4.0, 8.0, 'LOW')).toBe('CRITICAL');
+      expect(service.determineAlertLevel('temperature', 38, 20, 30, 'HIGH')).toBe('CRITICAL');
+      expect(service.determineAlertLevel('temperature', 31, 20, 30, 'HIGH')).toBe('WARNING');
+    });
+
+    it('bypasses cooldown when breach escalates to CRITICAL', async () => {
+      const device = {
+        deviceId: 'device-1',
+        pondId: 'pond-1',
+        pond: { userId: 'user-1' },
+      };
+      mockDeviceRepo.findOne.mockResolvedValue(device);
+      mockThresholdConfigRepo.find.mockResolvedValue([
+        { metricName: 'DO', minValue: 4.0, maxValue: 8.0, isActive: true },
+      ]);
+      mockRedisService.get = vi.fn().mockImplementation((key) => {
+        if (key.endsWith(':level')) return Promise.resolve('WARNING');
+        return Promise.resolve(null);
+      });
+      mockRedisService.set = vi.fn().mockResolvedValue('OK');
+      mockRedisService.setIfAbsent.mockResolvedValue(false); // Cooldown already exists
+
+      // Gửi DO = 2.0 (nguy cấp, < 3.0 -> CRITICAL)
+      await service.processTelemetryPayload({ deviceId: 'device-1', dissolvedOxygen: 2.0 });
+
+      // Cảnh báo CRITICAL vẫn được tạo do escalation
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          alertLevel: 'CRITICAL',
+          triggeredValue: 2.0,
+        }),
+      );
+    });
+  });
 });

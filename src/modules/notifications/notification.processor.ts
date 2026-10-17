@@ -68,6 +68,9 @@ export class NotificationQueueProcessor extends WorkerHost {
       );
       this.logger.log(`[Worker] Gửi email mật khẩu ban đầu thành công tới ${data.email}`);
     } else {
+      if (typeof this.emailService.sendNotificationEmail === 'function' && data.subject && data.text) {
+        await this.emailService.sendNotificationEmail(data.email, data.subject, data.text);
+      }
       this.logger.log(`[Worker] Gửi email thông báo tới ${data.email}: ${data.subject}`);
     }
   }

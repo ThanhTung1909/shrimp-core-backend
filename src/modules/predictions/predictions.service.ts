@@ -72,9 +72,12 @@ export class PredictionsService {
     let riskScore = 0.1;
     let riskLevel: RiskLevel = RiskLevel.LOW;
 
-    // Thử gọi AI Microservice nếu có cấu hình
+    // Thử gọi AI Microservice nếu có cấu hình (kèm Timeout 10s để không làm treo worker)
     let externalAiSuccess = false;
     if (aiApiUrl) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
       try {
         const response = await fetch(aiApiUrl, {
           method: 'POST',
@@ -86,6 +89,7 @@ export class PredictionsService {
             currentTemp,
             timestamp: new Date().toISOString(),
           }),
+          signal: controller.signal,
         });
         if (response.ok) {
           const result = await response.json();
@@ -98,6 +102,8 @@ export class PredictionsService {
         }
       } catch (err: any) {
         this.logger.warn(`[AI Prediction Warning] Không thể kết nối AI Microservice: ${err.message}. Sử dụng mô hình ước tính tích hợp.`);
+      } finally {
+        clearTimeout(timeoutId);
       }
     }
 
@@ -128,11 +134,13 @@ export class PredictionsService {
       predictedPH,
       riskScore,
       riskLevel,
+      isFallback: !externalAiSuccess,
+      predictionSource: externalAiSuccess ? 'AI_MICROSERVICE' : 'HEURISTIC_RULE',
     });
 
     const savedPrediction = await this.predictionRepo.save(predictionRecord);
     this.logger.log(
-      `[AI Prediction] Đã lưu bản ghi dự báo cho ao ${pondId}: DO=${predictedDO}, pH=${predictedPH}, RiskScore=${riskScore}, RiskLevel=${riskLevel}`,
+      `[AI Prediction] Đã lưu bản ghi dự báo cho ao ${pondId}: DO=${predictedDO}, pH=${predictedPH}, RiskScore=${riskScore}, RiskLevel=${riskLevel}, Source=${predictionRecord.predictionSource}`,
     );
 
     return savedPrediction;

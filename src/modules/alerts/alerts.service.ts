@@ -20,6 +20,7 @@ export interface CreateThresholdAlertInput {
   minValue: number;
   maxValue: number;
   direction: 'LOW' | 'HIGH';
+  alertLevel?: AlertLevel;
 }
 
 @Injectable()
@@ -32,12 +33,13 @@ export class AlertsService {
   async createThresholdAlert(input: CreateThresholdAlertInput): Promise<Alert> {
     const boundary = input.direction === 'LOW' ? input.minValue : input.maxValue;
     const comparison = input.direction === 'LOW' ? 'thấp hơn' : 'cao hơn';
+    const alertLevel = input.alertLevel || AlertLevel.WARNING;
     const alert = this.alertRepo.create({
       pondId: input.pondId,
       deviceId: input.deviceId,
       metricName: input.metricName,
       triggeredValue: input.triggeredValue,
-      alertLevel: AlertLevel.WARNING,
+      alertLevel,
       status: AlertStatus.ACTIVE,
       message: `Chỉ số ${input.metricName} đo được ${input.triggeredValue}, ${comparison} ngưỡng ${boundary} (khoảng cho phép ${input.minValue} - ${input.maxValue}).`,
     });
