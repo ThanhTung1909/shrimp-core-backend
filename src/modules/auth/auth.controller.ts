@@ -50,6 +50,7 @@ import { Gender } from '../../common/enums/gender.enum.js';
 import { JwtService } from '@nestjs/jwt';
 
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { getEmailOtpIdentifier } from '../../common/redis/otp.constants.js';
 
 export interface AuthenticatedRequest extends Request {
@@ -58,6 +59,7 @@ export interface AuthenticatedRequest extends Request {
 
 @ApiTags('Auth - Xác Thực & Phân Quyền')
 @Controller('auth')
+@Throttle({ default: { limit: 5, ttl: 60_000 } })
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
