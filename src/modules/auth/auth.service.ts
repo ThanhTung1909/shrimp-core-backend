@@ -1,4 +1,4 @@
-﻿import {
+import {
   BadRequestException,
   ConflictException,
   Injectable,
@@ -26,6 +26,7 @@ import { normalizePhone } from '../../common/redis/rate-limit.constants.js';
 import { OtpPurpose } from '../../common/redis/otp.constants.js';
 import { EmailService } from '../email/email.service.js';
 import { EsmsService } from '../../common/esms/esms.service.js';
+import { NotificationQueueService } from '../notifications/notification-queue.service.js';
 
 const DUMMY_HASH =
   '$2b$10$e8N8y2D2.f6Zf2g8H6J7K.1234567890abcdefghijklmnopqrstuv';
@@ -43,6 +44,8 @@ export class AuthService {
     private readonly esmsService: EsmsService,
     @Optional()
     private readonly otpService?: OtpService,
+    @Optional()
+    private readonly notificationQueueService?: NotificationQueueService,
   ) {}
 
   //Hàm gửi OTP (Lưu SHA-256 hash vào Redis với TTL 5 phút)
@@ -81,8 +84,12 @@ export class AuthService {
         );
         otp = result.otp;
 
-        // Gửi SMS qua eSMS
-        await this.esmsService.sendSMS(sendOtpDto.phoneNumber, otp);
+        // Gửi SMS qua BullMQ queue (hoặc gọi trực tiếp nếu queue không khả dụng)
+        if (this.notificationQueueService) {
+          await this.notificationQueueService.addSendSmsJob(sendOtpDto.phoneNumber, otp);
+        } else {
+          await this.esmsService.sendSMS(sendOtpDto.phoneNumber, otp);
+        }
       } else {
         if (process.env.NODE_ENV === 'production') {
           throw new InternalServerErrorException(
@@ -288,12 +295,22 @@ export class AuthService {
 
       // 5. Gửi email mật khẩu khởi tạo (không log password ra console)
       try {
-        await this.emailService.sendInitialPassword(
-          registerDto.email,
-          registerDto.fullName,
-          normalizedPhone,
-          plainPassword,
-        );
+        if (this.notificationQueueService) {
+          await this.notificationQueueService.addSendEmailJob({
+            type: 'initial-password',
+            email: registerDto.email,
+            fullName: registerDto.fullName,
+            phoneNumber: normalizedPhone,
+            password: plainPassword,
+          });
+        } else {
+          await this.emailService.sendInitialPassword(
+            registerDto.email,
+            registerDto.fullName,
+            normalizedPhone,
+            plainPassword,
+          );
+        }
       } catch (error) {
         throw new InternalServerErrorException(
           'Không thể gửi email mật khẩu khởi tạo. Vui lòng thử lại sau!',
