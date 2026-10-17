@@ -33,6 +33,7 @@ import { RedisService } from '../../common/redis/redis.service.js';
 import { EmailService } from '../email/email.service.js';
 import { EsmsService } from '../../common/esms/esms.service.js';
 import { LoginLockoutService } from '../../common/redis/login-lockout.service.js';
+import { NotificationQueueService } from '../notifications/notification-queue.service.js';
 
 const DUMMY_HASH =
   '$2b$10$e8N8y2D2.f6Zf2g8H6J7K.1234567890abcdefghijklmnopqrstuv';
@@ -55,6 +56,8 @@ export class AuthService {
     private readonly redisService?: RedisService,
     @Optional()
     private readonly loginLockoutService?: LoginLockoutService,
+    @Optional()
+    private readonly notificationQueueService?: NotificationQueueService,
   ) {}
 
   private isLocalOtpConsoleEnabled(): boolean {
@@ -149,7 +152,13 @@ export class AuthService {
       sendOtpDto.phoneNumber,
     );
     this.logLocalOtp(sendOtpDto.purpose, 'sms', otp);
-    await this.deliverOtp('sms', () => this.esmsService.sendSMS(sendOtpDto.phoneNumber, otp));
+    await this.deliverOtp('sms', async () => {
+      if (this.notificationQueueService) {
+        await this.notificationQueueService.addSendSmsJob(sendOtpDto.phoneNumber, otp);
+      } else {
+        await this.esmsService.sendSMS(sendOtpDto.phoneNumber, otp);
+      }
+    });
 
     return {
       message: sendOtpDto.purpose === OtpPurpose.RESET_PASSWORD
@@ -352,13 +361,23 @@ export class AuthService {
 
       // 5. Gửi email mật khẩu khởi tạo (không log password ra console)
       try {
-        await this.emailService.sendInitialPassword(
-          registerDto.email,
-          registerDto.fullName,
-          normalizedPhone,
-          plainPassword,
-        );
-      } catch {
+        if (this.notificationQueueService) {
+          await this.notificationQueueService.addSendEmailJob({
+            type: 'initial-password',
+            email: registerDto.email,
+            fullName: registerDto.fullName,
+            phoneNumber: normalizedPhone,
+            password: plainPassword,
+          });
+        } else {
+          await this.emailService.sendInitialPassword(
+            registerDto.email,
+            registerDto.fullName,
+            normalizedPhone,
+            plainPassword,
+          );
+        }
+      } catch (error) {
         throw new InternalServerErrorException(
           'Không thể gửi email mật khẩu khởi tạo. Vui lòng thử lại sau!',
         );

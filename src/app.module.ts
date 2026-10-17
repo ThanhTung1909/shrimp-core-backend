@@ -9,6 +9,8 @@ import { AlertsModule } from './modules/alerts/alerts.module.js';
 import { PredictionsModule } from './modules/predictions/predictions.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { RedisModule } from './common/redis/redis.module.js';
+import { QueueModule } from './common/queues/queue.module.js';
+import { NotificationsModule } from './modules/notifications/notifications.module.js';
 
 import { ScheduleModule } from '@nestjs/schedule';
 import { EsmsModule } from './common/esms/esms.module.js';
@@ -40,9 +42,15 @@ import { EsmsModule } from './common/esms/esms.module.js';
 
     // Module lưu trữ dữ liệu in-memory Redis (Global)
     RedisModule,
+
+    // Module Message Queue BullMQ (Redis Streams)
+    QueueModule,
     
     // Module SMS (Global)
     EsmsModule,
+
+    // Module Thông báo nền (Email, SMS, FCM)
+    NotificationsModule,
 
     // Các modules thực thể cốt lõi
     UsersModule,

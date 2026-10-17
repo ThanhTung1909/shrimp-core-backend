@@ -1,4 +1,4 @@
-import { InternalServerErrorException } from '@nestjs/common';
+import { InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import * as bcrypt from 'bcrypt';
 import { OtpPurpose } from '../../common/redis/otp.constants.js';
@@ -66,19 +66,16 @@ describe('AuthService local SMS mock response', () => {
     expect(esmsService.sendSMS).toHaveBeenCalledWith('0908123456', '654321');
   });
 
-  it('returns the same response shape without generating or exposing an OTP for an unknown account', async () => {
+  it('returns NotFoundException without generating or exposing an OTP for an unknown account', async () => {
     const { service, otpService, esmsService } = createAuthService(null);
 
-    const result = await service.sendOtp({
-      phoneNumber: '0908999999',
-      purpose: OtpPurpose.RESET_PASSWORD,
-    });
+    await expect(
+      service.sendOtp({
+        phoneNumber: '0908999999',
+        purpose: OtpPurpose.RESET_PASSWORD,
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
 
-    expect(result).toEqual({
-      message: 'Nếu số điện thoại hợp lệ, mã OTP đã được gửi',
-      phoneNumber: '0908999999',
-      expiresIn: '5 phút',
-    });
     expect(otpService?.createAndSaveOtp).not.toHaveBeenCalled();
     expect(esmsService.sendSMS).not.toHaveBeenCalled();
   });
@@ -182,19 +179,16 @@ describe('AuthService Email mock response', () => {
     );
   });
 
-  it('returns the same response shape but does NOT generate or send OTP for unknown email', async () => {
+  it('returns NotFoundException and does NOT generate or send OTP for unknown email', async () => {
     const { service, otpService, emailService } = createAuthServiceForEmail(null);
 
-    const result = await service.forgotPassword(
-      '',
-      'unknown@example.com'
-    );
+    await expect(
+      service.forgotPassword(
+        '',
+        'unknown@example.com'
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
 
-    expect(result).toEqual({
-      message: 'Nếu email hợp lệ, mã OTP đã được gửi',
-      email: 'unknown@example.com',
-      expiresIn: '5 phút',
-    });
     // REQUIREMENT: Email không tồn tại -> OTP generator không được gọi
     expect(otpService.createAndSaveOtp).not.toHaveBeenCalled();
     // REQUIREMENT: Email không tồn tại -> EmailService không được gọi

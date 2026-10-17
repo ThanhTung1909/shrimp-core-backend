@@ -136,7 +136,7 @@ export class DevicesService {
       throw new NotFoundException(`Không tìm thấy thiết bị với ID: ${deviceId}`);
     }
 
-    if (currentUserRole === Role.FARMER && device.pond?.userId !== currentUserId) {
+    if (currentUserRole === Role.FARMER && device.pond && device.pond.userId !== currentUserId) {
       throw new ForbiddenException('Bạn không có quyền truy cập thiết bị này!');
     }
 
@@ -188,6 +188,8 @@ export class DevicesService {
     if (dto.firmwareVersion !== undefined)
       device.firmwareVersion = dto.firmwareVersion;
     if (dto.status !== undefined) device.status = dto.status;
+    if (dto.lastActiveAt !== undefined)
+      device.lastActiveAt = dto.lastActiveAt ? new Date(dto.lastActiveAt) : null;
 
     return await this.deviceRepo.save(device);
   }

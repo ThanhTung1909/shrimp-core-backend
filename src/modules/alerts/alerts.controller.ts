@@ -6,28 +6,44 @@ import {
   Body,
   Query,
   ParseUUIDPipe,
+  UseGuards,
 } from '@nestjs/common';
 import { AlertsService } from './alerts.service.js';
 import { QueryAlertDto } from './dto/query-alert.dto.js';
 import { ResolveAlertDto } from './dto/resolve-alert.dto.js';
-
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import type { User } from '../users/entities/user.entity.js';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 
 @ApiTags('Alerts - Cảnh Báo Vi Phạm & Nguy Cơ')
 @ApiBearerAuth('JWT-auth')
+@UseGuards(JwtAuthGuard)
 @Controller('alerts')
 export class AlertsController {
-  constructor(private readonly alertsService: AlertsService) {}
+  constructor(private readonly alertsService: AlertsService) { }
 
   /**
    * Lấy danh sách toàn bộ cảnh báo (có phân trang và lọc)
    * GET /alerts
    */
   @Get()
-  @ApiOperation({ summary: 'Lấy danh sách các cảnh báo (Lọc theo deviceId, trạng thái ACTIVE/RESOLVED, phân trang)' })
-  @ApiResponse({ status: 200, description: 'Danh sách cảnh báo phân trang' })
-  async findAll(@Query() query: QueryAlertDto) {
-    const { data, total } = await this.alertsService.findAll(query);
+  @ApiOperation({
+    summary: 'Lấy danh sách cảnh báo theo quyền người dùng',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Danh sách cảnh báo phân trang',
+  })
+  async findAll(
+    @Query() query: QueryAlertDto,
+    @CurrentUser() currentUser: User,
+  ) {
+    const { data, total } = await this.alertsService.findAll(
+      query,
+      currentUser.userId,
+      currentUser.role,
+    );
 
     return {
       success: true,
@@ -43,15 +59,28 @@ export class AlertsController {
    * PATCH /alerts/:id/resolve
    */
   @Patch(':id/resolve')
-  @ApiOperation({ summary: 'Xác nhận và đánh dấu đã xử lý sự cố cảnh báo (Resolve alert + ghi chú)' })
-  @ApiResponse({ status: 200, description: 'Đã giải quyết cảnh báo thành công' })
-  @ApiResponse({ status: 404, description: 'Không tìm thấy cảnh báo với ID được chỉ định' })
+  @ApiOperation({
+    summary: 'Xác nhận và đánh dấu đã xử lý cảnh báo',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Đã giải quyết cảnh báo thành công',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Không tìm thấy cảnh báo',
+  })
   async resolve(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ResolveAlertDto,
+    @CurrentUser() currentUser: User,
   ) {
-    const mockUserId = '00000000-0000-0000-0000-000000000000';
-    const result = await this.alertsService.resolveAlert(id, mockUserId, dto);
+    const result = await this.alertsService.resolveAlert(
+      id,
+      currentUser.userId,
+      dto,
+      currentUser.role,
+    );
 
     return {
       success: true,

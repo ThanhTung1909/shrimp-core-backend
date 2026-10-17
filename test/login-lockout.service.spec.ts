@@ -26,7 +26,7 @@ describe('LoginLockoutService atomic Redis state', () => {
   beforeAll(async () => {
     redis = new RedisService(new ConfigService({
       REDIS_HOST: process.env.REDIS_HOST || '127.0.0.1',
-      REDIS_PORT: process.env.REDIS_PORT || 6390,
+      REDIS_PORT: process.env.REDIS_PORT || 6379,
       REDIS_DB: 0,
     }));
     await redis.onModuleInit();

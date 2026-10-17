@@ -155,7 +155,7 @@ describe('Email OTP with real Redis', () => {
   const purpose = OtpPurpose.RESET_PASSWORD;
   const next = () => getEmailOtpIdentifier(`p03-${randomUUID()}@example.com`);
   beforeAll(async () => {
-    redis = new RedisService(new ConfigService({ REDIS_PORT: process.env.REDIS_PORT || 6390 }));
+    redis = new RedisService(new ConfigService({ REDIS_HOST: process.env.REDIS_HOST || 'localhost', REDIS_PORT: process.env.REDIS_PORT || 6379, REDIS_DB: 14 }));
     await redis.onModuleInit();
     otp = new OtpService(redis);
   });

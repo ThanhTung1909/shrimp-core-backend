@@ -7,7 +7,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
   private client: Redis;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(private readonly configService: ConfigService) { }
 
   async onModuleInit(): Promise<void> {
     const host = this.configService.get<string>('REDIS_HOST') || 'localhost';
@@ -92,6 +92,14 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
    */
   async setEx(key: string, seconds: number, value: string): Promise<'OK'> {
     return (await this.client.setex(key, seconds, value)) as 'OK';
+  }
+
+  /**
+   * Đặt key có TTL chỉ khi key chưa tồn tại. Đây là một thao tác Redis nguyên tử.
+   */
+  async setIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    const result = await this.client.set(key, value, 'EX', ttlSeconds, 'NX');
+    return result === 'OK';
   }
 
   /**
