@@ -1,13 +1,13 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { createHash, randomInt } from 'crypto';
 import { RedisService } from './redis.service.js';
-import { normalizePhone } from './rate-limit.constants.js';
 import {
   OTP_CONFIG,
   getOtpCodeKey,
   getOtpAttemptsKey,
   getOtpVerifiedKey,
   OtpPurpose,
+  normalizeOtpIdentifier,
 } from './otp.constants.js';
 
 @Injectable()
@@ -89,7 +89,7 @@ export class OtpService {
     phone: string,
     ttlSeconds: number = OTP_CONFIG.TTL_SECONDS,
   ): Promise<{ otp: string; otpHash: string }> {
-    const normalized = normalizePhone(phone);
+    const normalized = normalizeOtpIdentifier(phone);
     if (!normalized) {
       throw new BadRequestException('Số điện thoại không hợp lệ!');
     }
@@ -134,7 +134,7 @@ export class OtpService {
    * @param otp Mã OTP gồm 6 chữ số người dùng nhập
    */
   async verifyOtp(purpose: OtpPurpose, phone: string, otp: string): Promise<boolean> {
-    const normalized = normalizePhone(phone);
+    const normalized = normalizeOtpIdentifier(phone);
     if (!normalized) {
       throw new BadRequestException('Số điện thoại không hợp lệ!');
     }
@@ -166,6 +166,7 @@ export class OtpService {
       )) as [number, string, number];
 
       const status = result[0];
+
       if (status !== 1) {
         throw new BadRequestException('Mã OTP không chính xác hoặc đã hết hạn!');
       }
@@ -187,7 +188,7 @@ export class OtpService {
    * Kiểm tra trạng thái số điện thoại đã được xác thực thành công trong vòng 10 phút qua.
    */
   async isPhoneVerified(purpose: OtpPurpose, phone: string): Promise<boolean> {
-    const normalized = normalizePhone(phone);
+    const normalized = normalizeOtpIdentifier(phone);
     if (!normalized) return false;
     const exists = await this.redisService.exists(getOtpVerifiedKey(purpose, normalized));
     return exists > 0;
@@ -198,7 +199,7 @@ export class OtpService {
    * Đảm bảo chỉ duy nhất 1 request có thể tiêu thụ thành công marker này.
    */
   async consumePhoneVerified(purpose: OtpPurpose, phone: string): Promise<boolean> {
-    const normalized = normalizePhone(phone);
+    const normalized = normalizeOtpIdentifier(phone);
     if (!normalized) {
       return false;
     }
@@ -240,7 +241,7 @@ export class OtpService {
     phone: string,
     ttlSeconds: number = OTP_CONFIG.VERIFIED_TTL_SECONDS,
   ): Promise<void> {
-    const normalized = normalizePhone(phone);
+    const normalized = normalizeOtpIdentifier(phone);
     if (!normalized) return;
     await this.redisService.set(getOtpVerifiedKey(purpose, normalized), '1', ttlSeconds);
   }
@@ -253,7 +254,7 @@ export class OtpService {
     phone: string,
     ttlSeconds: number = OTP_CONFIG.VERIFIED_TTL_SECONDS,
   ): Promise<void> {
-    const normalized = normalizePhone(phone);
+    const normalized = normalizeOtpIdentifier(phone);
     if (!normalized) return;
 
     const verifiedKey = getOtpVerifiedKey(purpose, normalized);
@@ -270,7 +271,7 @@ export class OtpService {
    * Lấy số lần nhập sai hiện tại của OTP (phục vụ testing).
    */
   async getOtpAttempts(purpose: OtpPurpose, phone: string): Promise<number> {
-    const normalized = normalizePhone(phone);
+    const normalized = normalizeOtpIdentifier(phone);
     const val = await this.redisService.get(getOtpAttemptsKey(purpose, normalized));
     return val !== null ? parseInt(val, 10) : 0;
   }
@@ -279,7 +280,7 @@ export class OtpService {
    * Lấy hash OTP đang lưu trong Redis (phục vụ testing).
    */
   async getOtpCodeHash(purpose: OtpPurpose, phone: string): Promise<string | null> {
-    const normalized = normalizePhone(phone);
+    const normalized = normalizeOtpIdentifier(phone);
     return this.redisService.get(getOtpCodeKey(purpose, normalized));
   }
 }

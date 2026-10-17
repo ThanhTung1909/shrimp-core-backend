@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ArgumentsHost, BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
+import { ArgumentsHost, BadRequestException, HttpException, HttpStatus, ServiceUnavailableException } from '@nestjs/common';
 import { AllExceptionsFilter } from './http-exception.filter.js';
 import { QueryFailedError } from 'typeorm';
 
@@ -120,5 +120,106 @@ describe('AllExceptionsFilter', () => {
         errorCode: 'INTERNAL_SERVER_ERROR',
       }),
     );
+  });
+
+  it('should extract retryAfterSeconds and set Retry-After header on 429 TOO_MANY_REQUESTS', () => {
+    mockResponse.setHeader = vi.fn();
+    const exception = new HttpException(
+      {
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        message: 'Quá nhiều yêu cầu, vui lòng thử lại sau!',
+        retryAfter: 35.2,
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
+
+    filter.catch(exception, mockArgumentsHost);
+
+    expect(mockResponse.status).toHaveBeenCalledWith(HttpStatus.TOO_MANY_REQUESTS);
+    expect(mockResponse.setHeader).toHaveBeenCalledWith('Retry-After', '36');
+    expect(mockResponse.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        retryAfterSeconds: 36,
+      }),
+    );
+  });
+
+  it('includes only whitelisted OTP delivery metadata for provider failures', () => {
+    const exception = new ServiceUnavailableException({
+      message: 'Dịch vụ gửi email bên thứ ba đang gặp lỗi. Vui lòng thử lại sau.',
+      error: 'OTP_DELIVERY_UNAVAILABLE',
+      data: { channel: 'email', otpStored: true, expiresIn: '5 phút', rawOtp: 'must-not-leak' },
+    });
+
+    filter.catch(exception, mockArgumentsHost);
+
+    expect(mockResponse.status).toHaveBeenCalledWith(HttpStatus.SERVICE_UNAVAILABLE);
+    expect(mockResponse.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        statusCode: HttpStatus.SERVICE_UNAVAILABLE,
+        errorCode: 'OTP_DELIVERY_UNAVAILABLE',
+        data: { channel: 'email', otpStored: true, expiresIn: '5 phút' },
+      }),
+    );
+    expect(JSON.stringify(mockResponse.json.mock.calls)).not.toContain('must-not-leak');
+  });
+
+  it('preserves ACCOUNT_TEMPORARILY_LOCKED errorCode, message, and retryAfterSeconds on 429', () => {
+    mockResponse.setHeader = vi.fn();
+    const exception = new HttpException(
+      {
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        message: 'Tài khoản tạm thời bị khóa do đăng nhập sai nhiều lần. Vui lòng thử lại sau 30 giây.',
+        errorCode: 'ACCOUNT_TEMPORARILY_LOCKED',
+        retryAfterSeconds: 21,
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
+
+    filter.catch(exception, mockArgumentsHost);
+
+    expect(mockResponse.status).toHaveBeenCalledWith(HttpStatus.TOO_MANY_REQUESTS);
+    expect(mockResponse.setHeader).toHaveBeenCalledWith('Retry-After', '21');
+    expect(mockResponse.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        statusCode: 429,
+        message: 'Tài khoản tạm thời bị khóa do đăng nhập sai nhiều lần. Vui lòng thử lại sau 30 giây.',
+        errorCode: 'ACCOUNT_TEMPORARILY_LOCKED',
+        retryAfterSeconds: 21,
+        path: '/test-endpoint',
+      }),
+    );
+  });
+
+  it('preserves ACCOUNT_PENDING_ADMIN_UNLOCK errorCode and message on 423 without retryAfterSeconds', () => {
+    mockResponse.setHeader = vi.fn();
+    const exception = new HttpException(
+      {
+        statusCode: 423,
+        message: 'Tài khoản đã bị khóa do đăng nhập sai quá số lần cho phép. Vui lòng liên hệ quản trị viên để được mở khóa.',
+        errorCode: 'ACCOUNT_PENDING_ADMIN_UNLOCK',
+      },
+      423,
+    );
+
+    filter.catch(exception, mockArgumentsHost);
+
+    expect(mockResponse.status).toHaveBeenCalledWith(423);
+    expect(mockResponse.setHeader).not.toHaveBeenCalled();
+    expect(mockResponse.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        statusCode: 423,
+        message: 'Tài khoản đã bị khóa do đăng nhập sai quá số lần cho phép. Vui lòng liên hệ quản trị viên để được mở khóa.',
+        errorCode: 'ACCOUNT_PENDING_ADMIN_UNLOCK',
+        path: '/test-endpoint',
+      }),
+    );
+    const jsonCallArg = mockResponse.json.mock.calls[0][0];
+    expect(jsonCallArg).not.toHaveProperty('retryAfterSeconds');
   });
 });

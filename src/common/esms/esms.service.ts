@@ -1,5 +1,6 @@
 import { Injectable, Logger, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class EsmsService {
@@ -14,6 +15,44 @@ export class EsmsService {
    * @param otp Mã OTP cần gửi
    */
   async sendSMS(phone: string, otp: string): Promise<any> {
+    const mode = (
+      this.configService.get<string>('SMS_MODE') || 'esms'
+    ).trim().toLowerCase();
+    const nodeEnv = (
+      this.configService.get<string>('NODE_ENV') ||
+      process.env.NODE_ENV ||
+      'development'
+    ).trim().toLowerCase();
+
+    // Chuẩn hóa số điện thoại: giữ nguyên định dạng số, bỏ các ký tự lạ
+    const normalizedPhone = phone.replace(/\D/g, '');
+
+    if (mode === 'mock') {
+      if (nodeEnv !== 'development' && nodeEnv !== 'test') {
+        this.logger.error(
+          `SMS_MODE=mock bị từ chối trong NODE_ENV=${nodeEnv}`,
+        );
+        throw new InternalServerErrorException(
+          'SMS mock chỉ được phép trong môi trường development hoặc test',
+        );
+      }
+
+      // OTP vẫn do OtpService sinh ngẫu nhiên và lưu hash trong Redis.
+      // AuthService chỉ có thể in OTP vào console ở local development khi fallback được bật rõ ràng.
+      this.logger.warn('SMS mock transport accepted a delivery request');
+      return {
+        CodeResult: '100',
+        ErrorMessage: '',
+        SMSID: `mock-${randomUUID()}`,
+        IsMock: true,
+      };
+    }
+
+    if (mode !== 'esms') {
+      this.logger.error(`SMS_MODE không hợp lệ: ${mode}`);
+      throw new InternalServerErrorException('Lỗi cấu hình SMS Gateway');
+    }
+
     const apiKey = this.configService.get<string>('ESMS_API_KEY');
     const secretKey = this.configService.get<string>('ESMS_SECRET_KEY');
 
@@ -24,9 +63,6 @@ export class EsmsService {
 
     const brandname = this.configService.get<string>('ESMS_BRANDNAME') || 'Baotrixemay';
     const template = this.configService.get<string>('ESMS_CONTENT_TEMPLATE') || '{OTP} la ma xac minh dang ky Baotrixemay cua ban';
-
-    // Chuẩn hóa số điện thoại: giữ nguyên định dạng số, bỏ các ký tự lạ
-    const normalizedPhone = phone.replace(/\D/g, '');
 
     // Nội dung chuẩn theo cấu hình
     const content = template
@@ -43,8 +79,8 @@ export class EsmsService {
       IsUnicode: '0',
     };
 
-    // Ẩn SecretKey khỏi log để bảo mật
-    this.logger.debug(`Sending SMS to eSMS. Payload: ${JSON.stringify({ ...payload, SecretKey: '***' })}`);
+    // Không log payload/content vì Content chứa OTP.
+    this.logger.debug('Sending SMS request to eSMS');
 
     try {
       const response = await fetch(this.apiUrl, {
@@ -59,32 +95,32 @@ export class EsmsService {
 
       // Kiểm tra nếu response trả về XML/HTML lỗi
       if (text.trim().startsWith('<')) {
-        this.logger.error(`eSMS returned XML/HTML error page: ${text}`);
+        this.logger.error('eSMS returned an invalid XML/HTML response');
         throw new InternalServerErrorException('eSMS Gateway trả về định dạng không hợp lệ (XML/HTML).');
       }
 
       let data;
       try {
         data = JSON.parse(text);
-      } catch (e) {
-        this.logger.error(`Failed to parse eSMS JSON response. Raw text: ${text}`);
+      } catch {
+        this.logger.error('Failed to parse eSMS JSON response');
         throw new InternalServerErrorException('Không thể phân tích phản hồi từ eSMS Gateway.');
       }
 
-      this.logger.debug(`Response from eSMS: ${JSON.stringify(data)}`);
+      this.logger.debug('Received eSMS response');
 
       if (data.CodeResult !== '100') {
-        const errorMsg = `eSMS Error [Code ${data.CodeResult}]: ${data.ErrorMessage}`;
+        const errorMsg = `eSMS rejected the request (code ${data.CodeResult})`;
         this.logger.error(errorMsg);
         throw new InternalServerErrorException(errorMsg);
       }
 
-      this.logger.log(`Gửi SMS thành công tới ${normalizedPhone}, RefId: ${data.SMSID}`);
+      this.logger.log('eSMS accepted the delivery request');
       return data;
-    } catch (error: any) {
-      this.logger.error(`Lỗi kết nối hoặc xử lý eSMS: ${error.message}`);
+    } catch {
+      this.logger.error('Unable to send SMS through eSMS');
       throw new InternalServerErrorException(
-        error.message || 'Không thể kết nối đến hệ thống gửi SMS',
+        'Không thể kết nối đến hệ thống gửi SMS',
       );
     }
   }

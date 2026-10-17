@@ -24,6 +24,7 @@ import { UpdateFcmTokenDto } from './dto/update-fcm-token.dto.js';
 import { AdminUpdateUserDto } from './dto/admin-update-user.dto.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
 import { FindUsersQueryDto } from './dto/find-users-query.dto.js';
+import { UnlockUserDto } from './dto/unlock-user.dto.js';
 
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 
@@ -91,11 +92,11 @@ export class UsersController {
   @ApiOperation({ summary: 'Quản trị viên khởi tạo tài khoản người dùng mới' })
   @ApiResponse({ status: 201, description: 'Tạo người dùng thành công' })
   @ApiResponse({ status: 409, description: 'Số điện thoại đã tồn tại' })
-  async createUser(@Body() createUserDto: CreateUserDto): Promise<{
+  async createUser(@Body() createUserDto: CreateUserDto, @CurrentUser('userId') actorId: string): Promise<{
     message: string;
     user: Omit<User, 'passwordHash'>;
   }> {
-    const newUser = await this.usersService.createUserByAdmin(createUserDto);
+    const newUser = await this.usersService.createUserByAdmin(createUserDto, actorId);
     return {
       message: 'Tạo tài khoản người dùng thành công!',
       user: newUser,
@@ -125,6 +126,19 @@ export class UsersController {
   }
 
   // API 6: Quản trị viên cập nhật thông tin/trạng thái tài khoản người dùng
+  @Patch(':id/unlock')
+  @Roles(Role.ADMIN, Role.MANAGER)
+  @ApiOperation({ summary: 'Mở khóa do đăng nhập sai; không mở khóa quản trị hoặc chính mình' })
+  @ApiResponse({ status: 200, description: 'Mở khóa thành công' })
+  @ApiResponse({ status: 403, description: 'Không có quyền mở khóa tài khoản này' })
+  async unlockUser(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') actorId: string,
+    @Body() dto: UnlockUserDto,
+  ): Promise<{ message: string; userId: string }> {
+    return this.usersService.unlockUser(actorId, id, dto.reason);
+  }
+
   @Patch(':id')
   @Roles(Role.MANAGER)
   @ApiOperation({ summary: 'Quản trị viên cập nhật thông tin hoặc trạng thái tài khoản người dùng' })
@@ -132,6 +146,7 @@ export class UsersController {
   async adminUpdateUser(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() adminUpdateUserDto: AdminUpdateUserDto,
+    @CurrentUser('userId') actorId: string,
   ): Promise<{
     message: string;
     user: Omit<User, 'passwordHash'>;
@@ -139,6 +154,7 @@ export class UsersController {
     const updatedUser = await this.usersService.adminUpdateUser(
       id,
       adminUpdateUserDto,
+      actorId,
     );
     return {
       message: 'Cập nhật tài khoản người dùng thành công!',
@@ -153,7 +169,8 @@ export class UsersController {
   @ApiResponse({ status: 200, description: 'Xóa tài khoản người dùng thành công' })
   async deleteUser(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') actorId: string,
   ): Promise<{ message: string }> {
-    return this.usersService.deleteUser(id);
+    return this.usersService.deleteUser(id, actorId);
   }
 }
