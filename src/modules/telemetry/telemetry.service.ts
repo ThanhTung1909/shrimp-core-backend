@@ -1,0 +1,529 @@
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { DataSource, Repository, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
+import { TelemetryData } from './entities/telemetry-data.entity.js';
+import { Device } from '../devices/entities/device.entity.js';
+import { DeviceStatus } from '../../common/enums/device-status.enum.js';
+import { CreateTelemetryDto } from './dto/create-telemetry.dto.js';
+import { QueryTelemetryDto } from './dto/query-telemetry.dto.js';
+import { Alert } from '../alerts/entities/alert.entity.js';
+import { AlertLevel } from '../../common/enums/alert-level.enum.js';
+import { AlertStatus } from '../../common/enums/alert-status.enum.js';
+import { ThresholdConfig } from '../ponds/entities/threshold-config.entity.js';
+import { AlertsService } from '../alerts/alerts.service.js';
+import { RedisService } from '../../common/redis/redis.service.js';
+
+const THRESHOLD_COOLDOWN_SECONDS = 15 * 60;
+const THRESHOLD_METRICS = [
+  { property: 'temperature', normalized: 'temperature' },
+  { property: 'ph', normalized: 'ph' },
+  { property: 'dissolvedOxygen', normalized: 'dissolvedoxygen' },
+  { property: 'salinity', normalized: 'salinity' },
+  { property: 'turbidity', normalized: 'turbidity' },
+] as const;
+
+type ThresholdMetricProperty = (typeof THRESHOLD_METRICS)[number]['property'];
+
+@Injectable()
+export class TelemetryService implements OnModuleInit {
+  private readonly logger = new Logger(TelemetryService.name);
+
+  constructor(
+    @InjectRepository(TelemetryData)
+    private readonly telemetryRepo: Repository<TelemetryData>,
+    @InjectRepository(Device)
+    private readonly deviceRepo: Repository<Device>,
+    @InjectRepository(Alert)
+    private readonly alertRepo: Repository<Alert>,
+    @InjectRepository(ThresholdConfig)
+    private readonly thresholdConfigRepo: Repository<ThresholdConfig>,
+    private readonly dataSource: DataSource,
+    private readonly alertsService: AlertsService,
+    private readonly redisService: RedisService,
+  ) { }
+
+  async onModuleInit() {
+    await this.ensureTimescaleDbConfig();
+  }
+
+  /**
+   * Đảm bảo extension TimescaleDB và Hypertable telemetry_data đã được kích hoạt.
+   */
+  async ensureTimescaleDbConfig(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+
+    try {
+      // 1. Kiểm tra extension timescaledb
+      await queryRunner.query('CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;');
+      this.logger.log('[TimescaleDB] Extension timescaledb sẵn sàng.');
+
+      // 2. Đảm bảo bảng telemetry_data được cấu hình thành Hypertable
+      const isHypertableResult = await queryRunner.query(`
+        SELECT count(*) as count 
+        FROM timescaledb_information.hypertables 
+        WHERE hypertable_name = 'telemetry_data';
+      `);
+
+      const isHypertable = parseInt(isHypertableResult[0]?.count, 10) > 0;
+
+      if (!isHypertable) {
+        await queryRunner.query(`
+          SELECT create_hypertable(
+            'telemetry_data', 
+            'recorded_at', 
+            chunk_time_interval => INTERVAL '7 days', 
+            if_not_exists => TRUE,
+            migrate_data => TRUE
+          );
+        `);
+        this.logger.log('[TimescaleDB] Đã khởi tạo Hypertable cho bảng telemetry_data (chu kỳ 7 ngày).');
+      } else {
+        this.logger.log('[TimescaleDB] Bảng telemetry_data đã là Hypertable.');
+      }
+    } catch (error) {
+      this.logger.error('[TimescaleDB] Lỗi khởi tạo cấu hình TimescaleDB:', error);
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  /**
+   * Xử lý gói tin dữ liệu cảm biến từ MQTT:
+   * 1. Kiểm tra thiết bị trong CSDL (Device)
+   * 2. Nếu không tìm thấy: Ghi Security Warning Log và từ chối lưu
+   * 3. Nếu hợp lệ: Lưu TimescaleDB, cập nhật thiết bị, publish realtime và đánh giá threshold
+   */
+  async processTelemetryPayload(dto: CreateTelemetryDto): Promise<TelemetryData | null> {
+    const device = await this.deviceRepo.findOne({
+      where: { deviceId: dto.deviceId },
+      relations: { pond: true },
+      select: {
+        deviceId: true,
+        pondId: true,
+        status: true,
+        lastActiveAt: true,
+        pond: {
+          pondId: true,
+          userId: true,
+        },
+      },
+    });
+
+    if (!device) {
+      this.logger.warn(
+        `[Security Warning] Nhận gói tin từ thiết bị chưa đăng ký trên hệ thống (deviceId: ${dto.deviceId}). Từ chối xử lý dữ liệu.`,
+      );
+      return null;
+    }
+
+    const recordedAt = dto.recordedAt ? new Date(dto.recordedAt) : new Date();
+
+    const telemetryRecord = this.telemetryRepo.create({
+      deviceId: dto.deviceId,
+      temperature: dto.temperature ?? null,
+      ph: dto.ph ?? null,
+      salinity: dto.salinity ?? null,
+      dissolvedOxygen: dto.dissolvedOxygen ?? null,
+      turbidity: dto.turbidity ?? null,
+      waterLevel: dto.waterLevel ?? null,
+      isBuffered: dto.isBuffered ?? false,
+      recordedAt,
+    });
+
+    const savedRecord = await this.telemetryRepo.save(telemetryRecord);
+
+    // Cập nhật trạng thái hoạt động thụ động cho thiết bị (Implicit Update)
+    await this.deviceRepo.update(dto.deviceId, {
+      status: DeviceStatus.ONLINE,
+      lastActiveAt: new Date(),
+    });
+
+    this.logger.log(
+      `[Telemetry] Đã lưu dữ liệu cảm biến cho thiết bị ${dto.deviceId} vào TimescaleDB.`,
+    );
+
+    try {
+      await this.redisService.publish(
+        'telemetry:new',
+        JSON.stringify({
+          pondId: device.pondId,
+          userId: device.pond?.userId || null,
+          data: savedRecord,
+        }),
+      );
+    } catch (err: any) {
+      this.logger.error(`[Redis Publish Error] Lỗi publish telemetry:new: ${err.message}`);
+    }
+
+    await this.evaluateThresholds(device, dto);
+
+    return savedRecord;
+  }
+
+  private normalizeMetricName(metricName: string): string {
+    const normalized = metricName.toLowerCase().replace(/[\s_-]/g, '');
+    if (normalized === 'temp') return 'temperature';
+    if (normalized === 'do') return 'dissolvedoxygen';
+    return normalized;
+  }
+
+  async getThresholdConfigsForPond(pondId: string): Promise<ThresholdConfig[]> {
+    const cacheKey = `cache:thresholds:${pondId}`;
+    if (this.redisService && typeof this.redisService.get === 'function') {
+      try {
+        const cached = await this.redisService.get(cacheKey);
+        if (cached) {
+          return JSON.parse(cached);
+        }
+      } catch (err: any) {
+        this.logger.warn(`[Redis Cache Error] Không thể đọc cache ${cacheKey}: ${err.message}`);
+      }
+    }
+
+    const configs = await this.thresholdConfigRepo.find({
+      where: { pondId, isActive: true },
+    });
+
+    if (this.redisService && typeof this.redisService.set === 'function') {
+      try {
+        await this.redisService.set(cacheKey, JSON.stringify(configs), 15 * 60);
+      } catch (err: any) {
+        this.logger.warn(`[Redis Cache Error] Không thể ghi cache ${cacheKey}: ${err.message}`);
+      }
+    }
+
+    return configs;
+  }
+
+  determineAlertLevel(
+    normalizedMetric: string,
+    value: number,
+    minValue: number,
+    maxValue: number,
+    direction: 'LOW' | 'HIGH',
+  ): AlertLevel {
+    const boundary = direction === 'LOW' ? minValue : maxValue;
+    const deviation = Math.abs(value - boundary);
+    const deviationPercent = boundary !== 0 ? deviation / boundary : 0;
+
+    // Ngưỡng nguy cấp ngành tôm:
+    // 1. Oxy hòa tan DO < 3.0 mg/L (tôm ngạt khí)
+    // 2. pH < 6.8 hoặc pH > 9.2 (sốc môi trường nặng)
+    // 3. Hoặc mức lệch ngưỡng >= 25%
+    if (
+      (normalizedMetric === 'dissolvedoxygen' && value < 3.0) ||
+      (normalizedMetric === 'ph' && (value < 6.8 || value > 9.2)) ||
+      deviationPercent >= 0.25
+    ) {
+      return AlertLevel.CRITICAL;
+    }
+
+    return AlertLevel.WARNING;
+  }
+
+  async evaluateThresholds(
+    deviceOrId: Device | string,
+    dto: CreateTelemetryDto,
+  ): Promise<void> {
+    const device =
+      typeof deviceOrId === 'string'
+        ? await this.deviceRepo.findOne({ where: { deviceId: deviceOrId } })
+        : deviceOrId;
+
+    if (!device || !device.pondId) return;
+
+    if (dto.isBuffered) {
+      this.logger.debug?.(
+        `[Alert Engine] Bỏ qua đánh giá ngưỡng cho telemetry được đệm (isBuffered: true, deviceId: ${device.deviceId}).`,
+      );
+      return;
+    }
+
+    try {
+      const configs = await this.getThresholdConfigsForPond(device.pondId);
+      const configsByMetric = new Map<string, ThresholdConfig>();
+      for (const config of configs) {
+        if (!config.isActive) continue;
+        const normalizedName = this.normalizeMetricName(config.metricName);
+        if (!configsByMetric.has(normalizedName)) {
+          configsByMetric.set(normalizedName, config);
+        }
+      }
+
+      for (const metric of THRESHOLD_METRICS) {
+        const value = dto[metric.property as ThresholdMetricProperty];
+        if (value === null || value === undefined) continue;
+
+        const config = configsByMetric.get(metric.normalized);
+        if (!config) continue;
+
+        const numericValue = Number(value);
+        const minValue = Number(config.minValue);
+        const maxValue = Number(config.maxValue);
+
+        if (
+          !Number.isFinite(numericValue) ||
+          !Number.isFinite(minValue) ||
+          !Number.isFinite(maxValue)
+        ) {
+          continue;
+        }
+
+        if (minValue > maxValue) {
+          this.logger.warn(
+            `[Alert Engine] Cấu hình ngưỡng không hợp lệ cho ao ${device.pondId}, chỉ số ${config.metricName}: minValue (${minValue}) > maxValue (${maxValue}). Bỏ qua.`,
+          );
+          continue;
+        }
+
+        const direction =
+          numericValue < minValue ? 'LOW' : numericValue > maxValue ? 'HIGH' : null;
+        if (!direction) continue;
+
+        await this.createThresholdAlert(
+          device,
+          config,
+          metric.normalized,
+          numericValue,
+          direction,
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        `[Alert Engine] Không thể đánh giá ngưỡng cho thiết bị ${device.deviceId}; dữ liệu telemetry đã được lưu.`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  private async createThresholdAlert(
+    device: Device,
+    config: ThresholdConfig,
+    normalizedMetric: string,
+    triggeredValue: number,
+    direction: 'LOW' | 'HIGH',
+  ): Promise<void> {
+    const cooldownKey = `alert:cooldown:${config.pondId}:${device.deviceId}:${normalizedMetric}:${direction}`;
+    const alertLevel = this.determineAlertLevel(
+      normalizedMetric,
+      triggeredValue,
+      Number(config.minValue),
+      Number(config.maxValue),
+      direction,
+    );
+
+    let cooldownSet = false;
+    let isEscalated = false;
+
+    try {
+      cooldownSet = await this.redisService.setIfAbsent(
+        cooldownKey,
+        '1',
+        THRESHOLD_COOLDOWN_SECONDS,
+      );
+
+      // Nếu cooldown đã tồn tại (setIfAbsent trả về false), kiểm tra xem có Delta Escalation lên CRITICAL không
+      if (!cooldownSet) {
+        if (typeof this.redisService.get === 'function') {
+          try {
+            const existingLevel = await this.redisService.get(`${cooldownKey}:level`);
+            if (alertLevel === AlertLevel.CRITICAL && existingLevel !== AlertLevel.CRITICAL) {
+              isEscalated = true;
+              this.logger.warn(
+                `[Alert Engine Escalation] Phá vỡ cooldown cho ao ${config.pondId || device.pondId}, thiết bị ${device.deviceId}, chỉ số ${config.metricName}: Thang đo nâng lên CRITICAL (giá trị: ${triggeredValue}).`,
+              );
+              if (typeof this.redisService.set === 'function') {
+                await this.redisService.set(`${cooldownKey}:level`, AlertLevel.CRITICAL, THRESHOLD_COOLDOWN_SECONDS);
+              }
+            }
+          } catch {
+            // Safe ignore
+          }
+        }
+
+        if (!isEscalated) return;
+      } else {
+        if (typeof this.redisService.set === 'function') {
+          try {
+            await this.redisService.set(`${cooldownKey}:level`, alertLevel, THRESHOLD_COOLDOWN_SECONDS);
+          } catch {
+            // Safe ignore
+          }
+        }
+      }
+
+      const alert = await this.alertsService.createThresholdAlert({
+        pondId: config.pondId,
+        deviceId: device.deviceId,
+        metricName: config.metricName,
+        triggeredValue,
+        minValue: Number(config.minValue),
+        maxValue: Number(config.maxValue),
+        direction,
+        alertLevel,
+      });
+
+      try {
+        await this.redisService.publish(
+          'alert:triggered',
+          JSON.stringify({
+            pondId: config.pondId,
+            userId: device.pond?.userId || null,
+            alert,
+          }),
+        );
+      } catch (error) {
+        this.logger.error(
+          '[Redis Publish Error] Lỗi publish alert:triggered cho threshold alert.',
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+    } catch (error) {
+      if (cooldownSet && !isEscalated) {
+        try {
+          await this.redisService.del(cooldownKey);
+        } catch (cleanupError) {
+          this.logger.error(
+            `[Alert Engine] Không thể xóa cooldown lỗi cho ${cooldownKey}.`,
+            cleanupError instanceof Error ? cleanupError.stack : String(cleanupError),
+          );
+        }
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Lưu bản ghi dữ liệu cảm biến (trực tiếp)
+   */
+  async recordTelemetry(data: Partial<TelemetryData>): Promise<TelemetryData> {
+    const record = this.telemetryRepo.create(data);
+    return await this.telemetryRepo.save(record);
+  }
+
+  /**
+   * Lấy bản ghi dữ liệu cảm biến mới nhất của một thiết bị
+   */
+  async getLatestByDeviceId(deviceId: string): Promise<TelemetryData | null> {
+    return await this.telemetryRepo.findOne({
+      where: { deviceId },
+      order: { recordedAt: 'DESC' },
+    });
+  }
+
+  /**
+   * Lấy lịch sử dữ liệu cảm biến của thiết bị theo khoảng thời gian và phân trang
+   */
+  async getHistoryByDeviceId(
+    deviceId: string,
+    query: QueryTelemetryDto,
+  ): Promise<{ data: TelemetryData[]; total: number }> {
+    const { startDate, endDate, limit = 100, page = 1 } = query;
+    const skip = (page - 1) * limit;
+
+    const whereConditions: any = { deviceId };
+
+    if (startDate && endDate) {
+      whereConditions.recordedAt = Between(new Date(startDate), new Date(endDate));
+    } else if (startDate) {
+      whereConditions.recordedAt = MoreThanOrEqual(new Date(startDate));
+    } else if (endDate) {
+      whereConditions.recordedAt = LessThanOrEqual(new Date(endDate));
+    }
+
+    const [data, total] = await this.telemetryRepo.findAndCount({
+      where: whereConditions,
+      order: { recordedAt: 'DESC' },
+      take: limit,
+      skip,
+    });
+
+    return { data, total };
+  }
+
+  async updateDeviceStatus(deviceId: string, status: DeviceStatus): Promise<Device | null> {
+    const device = await this.deviceRepo.findOne({
+      where: { deviceId },
+      relations: { pond: true },
+      select: {
+        deviceId: true,
+        deviceName: true,
+        pondId: true,
+        status: true,
+        lastActiveAt: true,
+        pond: {
+          pondId: true,
+          userId: true,
+        },
+      },
+    });
+    if (!device) {
+      return null;
+    }
+
+    device.status = status;
+    if (status === DeviceStatus.ONLINE) {
+      device.lastActiveAt = new Date();
+    }
+    const updatedDevice = await this.deviceRepo.save(device);
+
+    if (status === DeviceStatus.OFFLINE && device.pondId) {
+      const activeAlert = await this.alertRepo.findOne({
+        where: {
+          pondId: device.pondId,
+          metricName: 'device_status',
+          status: AlertStatus.ACTIVE,
+          alertLevel: AlertLevel.CRITICAL,
+        },
+        order: { createdAt: 'DESC' },
+      });
+
+      if (!activeAlert) {
+        const newAlert = this.alertRepo.create({
+          pondId: device.pondId,
+          deviceId: device.deviceId,
+          metricName: 'device_status',
+          triggeredValue: 0,
+          alertLevel: AlertLevel.CRITICAL,
+          status: AlertStatus.ACTIVE,
+          message: `Thiết bị ${device.deviceName || device.deviceId} mất kết nối mạng đột ngột hoặc quá hạn phản hồi`,
+        });
+        const savedAlert = await this.alertRepo.save(newAlert);
+
+        try {
+          await this.redisService.publish(
+            'alert:triggered',
+            JSON.stringify({
+              pondId: device.pondId,
+              userId: device.pond?.userId || null,
+              alert: savedAlert,
+            }),
+          );
+        } catch (err: any) {
+          this.logger.error(`[Redis Publish Error] Lỗi publish alert:triggered: ${err.message}`);
+        }
+      }
+    }
+
+    return updatedDevice;
+  }
+
+  async checkAndMarkOfflineDevices(timeoutMinutes: number = 15): Promise<number> {
+    const thresholdDate = new Date(Date.now() - timeoutMinutes * 60 * 1000);
+    const offlineDevices = await this.deviceRepo.find({
+      where: {
+        status: DeviceStatus.ONLINE,
+        lastActiveAt: LessThanOrEqual(thresholdDate),
+      },
+    });
+
+    let updatedCount = 0;
+    for (const device of offlineDevices) {
+      await this.updateDeviceStatus(device.deviceId, DeviceStatus.OFFLINE);
+      updatedCount++;
+    }
+
+    return updatedCount;
+  }
+}
