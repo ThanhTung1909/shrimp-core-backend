@@ -22,7 +22,7 @@ export class AlertsService {
     qb.leftJoinAndSelect('alert.device', 'device');
 
     if (deviceId) {
-      qb.andWhere('alert.device_id = :deviceId', { deviceId });
+      qb.andWhere('alert.deviceId = :deviceId', { deviceId });
     }
 
     if (isResolved !== undefined) {
@@ -30,7 +30,7 @@ export class AlertsService {
       qb.andWhere('alert.status = :status', { status });
     }
 
-    qb.orderBy('alert.created_at', 'DESC');
+    qb.orderBy('alert.createdAt', 'DESC');
     qb.skip(skip);
     qb.take(limit);
 
