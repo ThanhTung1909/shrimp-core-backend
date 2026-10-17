@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { UsersModule } from '../users/users.module.js';
 import { EmailModule } from '../email/email.module.js';
+import { NotificationsModule } from '../notifications/notifications.module.js';
 import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthService } from './auth.service.js';
@@ -14,6 +15,7 @@ import { UserSession } from './entities/user-session.entity.js';
     ConfigModule,
     UsersModule,
     EmailModule,
+    NotificationsModule,
     TypeOrmModule.forFeature([UserSession]),
 
     JwtModule.registerAsync({

@@ -62,7 +62,7 @@ export class AlertsService {
     }
 
     if (deviceId) {
-      qb.andWhere('alert.device_id = :deviceId', { deviceId });
+      qb.andWhere('alert.deviceId = :deviceId', { deviceId });
     }
 
     if (isResolved !== undefined) {
