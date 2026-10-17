@@ -40,7 +40,7 @@
     "bcrypt": "^6.0.0",
     "bullmq": "^5.81.5",
     "class-transformer": "^0.5.1",
-    "class-validator": "^0.15.1",
+    "class-validator": "^0.14.1",
     "helmet": "^8.3.0",
     "ioredis": "^5.11.1",
     "mqtt": "^5.15.2",
@@ -57,7 +57,6 @@
     "@nestjs/cli": "^10.4.5",
     "@nestjs/schematics": "^10.0.0",
     "@nestjs/testing": "^10.4.15",
-    "@rolldown/binding-darwin-x64": "^1.2.6",
     "@types/bcrypt": "^6.0.0",
     "@types/express": "^5.0.0",
     "@types/node": "^24.0.0",
@@ -71,7 +70,7 @@
     "source-map-support": "^0.5.21",
     "socket.io-client": "^4.8.4",
     "supertest": "^7.0.0",
-    "typescript": "^6.0.2",
+    "typescript": "^5.7.2",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^4.1.2"
   }
