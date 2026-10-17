@@ -18,6 +18,7 @@ import { AuthController } from '../src/modules/auth/auth.controller.js';
 import { AuthService } from '../src/modules/auth/auth.service.js';
 import { UsersService } from '../src/modules/users/users.service.js';
 import { RateLimitService } from '../src/common/redis/rate-limit.service.js';
+import { RedisService } from '../src/common/redis/redis.service.js';
 import { JwtAuthGuard } from '../src/common/guards/jwt-auth.guard.js';
 import { JwtStrategy } from '../src/modules/auth/strategies/jwt.strategy.js';
 import { RolesGuard } from '../src/common/guards/roles.guard.js';
@@ -153,6 +154,12 @@ async function createAuthControllerTestApp(): Promise<{
       { provide: AuthService, useValue: authService },
       { provide: UsersService, useValue: usersService },
       { provide: RateLimitService, useValue: rateLimitService },
+      {
+        provide: RedisService,
+        useValue: {
+          get: vi.fn().mockResolvedValue(null),
+        },
+      },
     ],
   }).compile();
 
@@ -231,12 +238,17 @@ describe('HTTP security headers and throttling', () => {
     const { app, usersService } = await createAuthControllerTestApp();
     try {
       const jwtService = app.get(JwtService);
-      const accessToken = await jwtService.signAsync({
-        sub: 'p0-4-user',
-        tokenVersion: 0,
-        role: Role.FARMER,
-        type: 'access',
-      });
+      const accessToken = await jwtService.signAsync(
+        {
+          sub: 'p0-4-user',
+          tokenVersion: 0,
+          role: Role.FARMER,
+          type: 'access',
+        },
+        {
+          jwtid: 'p0-4-test-jwt-id',
+        },
+      );
 
       for (let index = 0; index < 5; index += 1) {
         await request(app.getHttpServer())

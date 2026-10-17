@@ -9,6 +9,7 @@ import {
   Optional,
   Post,
   Req,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
@@ -25,6 +26,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto.js';
 import { SendOtpDto } from './dto/send-otp.dto.js';
 import { VerifyOtpDto } from './dto/verify-otp.dto.js';
 import { LogoutDto } from './dto/logout.dto.js';
+import { ForgotPasswordDto } from './dto/forgot-password.dto.js';
 
 import { UsersService } from '../users/users.service.js';
 import { User } from '../users/entities/user.entity.js';
@@ -45,9 +47,11 @@ import {
 import { Public } from '../../common/decorators/public.decorator.js';
 
 import { Gender } from '../../common/enums/gender.enum.js';
+import { JwtService } from '@nestjs/jwt';
 
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import { getEmailOtpIdentifier } from '../../common/redis/otp.constants.js';
 
 export interface AuthenticatedRequest extends Request {
   user: Omit<User, 'passwordHash'>;
@@ -62,6 +66,8 @@ export class AuthController {
     private readonly usersService: UsersService,
     @Optional()
     private readonly rateLimitService?: RateLimitService,
+    @Optional()
+    private readonly jwtService?: JwtService,
   ) {}
 
   private async applyRateLimit(
@@ -90,9 +96,48 @@ export class AuthController {
     }
   }
 
+  /**
+   * Extract jti and exp from the Bearer access token in the Authorization header.
+   * Throws UnauthorizedException if the header is missing, malformed, or missing jti/exp.
+   * Does NOT verify the signature here — passport-jwt already verified it before
+   * this controller handler runs.
+   */
+  private extractAccessTokenClaims(
+    authHeader: string | undefined,
+  ): { jti: string; exp: number } {
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      throw new UnauthorizedException('Thiếu hoặc sai định dạng Authorization header!');
+    }
+    const token = authHeader.slice(7);
+    try {
+      const payload = this.jwtService
+        ? (this.jwtService.decode(token) as any)
+        : (JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()) as any);
+
+      if (
+        !payload?.jti ||
+        typeof payload.jti !== 'string' ||
+        !payload?.exp ||
+        !Number.isFinite(payload.exp)
+      ) {
+        throw new UnauthorizedException('Access token không hợp lệ!');
+      }
+
+      return {
+        jti: payload.jti,
+        exp: payload.exp,
+      };
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      throw new UnauthorizedException('Access token không hợp lệ!');
+    }
+  }
+
   @Public()
   @Post('send-otp')
-  @ApiOperation({ summary: 'Gửi mã xác thực OTP qua SMS/Email' })
+  @ApiOperation({ summary: 'Gửi mã xác thực OTP qua SMS' })
   @ApiResponse({ status: 200, description: 'Gửi mã OTP thành công' })
   @ApiResponse({ status: 429, description: 'Gửi quá nhiều yêu cầu OTP' })
   async sendOtp(
@@ -101,7 +146,6 @@ export class AuthController {
   ): Promise<{
     message: string;
     phoneNumber: string;
-    otp?: string;
     expiresIn: string;
   }> {
     await this.applyRateLimit(
@@ -117,6 +161,42 @@ export class AuthController {
     return this.authService.sendOtp(sendOtpDto);
   }
 
+  /**
+   * POST /auth/forgot-password
+   * Public endpoint. Triggers a RESET_PASSWORD OTP via SMS or email.
+   * Missing recovery accounts intentionally return 404 by product policy.
+   */
+  @Public()
+  @Post('forgot-password')
+  @ApiOperation({ summary: 'Gửi OTP đặt lại mật khẩu qua SMS hoặc Email (chỉ một định danh)' })
+  @ApiResponse({ status: 201, description: 'Gửi mã OTP đặt lại mật khẩu thành công' })
+  @ApiResponse({ status: 400, description: 'Định danh không hợp lệ hoặc thiếu thông tin' })
+  @ApiResponse({ status: 404, description: 'Tài khoản không tồn tại' })
+  @ApiResponse({ status: 429, description: 'Quá nhiều yêu cầu, vui lòng thử lại sau!' })
+  async forgotPassword(
+    @Body() dto: ForgotPasswordDto,
+    @Ip() ip?: string,
+  ): Promise<{
+    message: string;
+    phoneNumber?: string;
+    email?: string;
+    expiresIn: string;
+  }> {
+    await this.applyRateLimit(
+      dto.email !== undefined
+        ? `rl:otp:send:${getEmailOtpIdentifier(dto.email)}`
+        : getOtpSendPhoneKey(dto.phoneNumber),
+      RATE_LIMIT_CONFIG.OTP_SEND.PHONE_LIMIT,
+      RATE_LIMIT_CONFIG.OTP_SEND.PHONE_WINDOW,
+    );
+    await this.applyRateLimit(
+      getOtpSendIpKey(ip),
+      RATE_LIMIT_CONFIG.OTP_SEND.IP_LIMIT,
+      RATE_LIMIT_CONFIG.OTP_SEND.IP_WINDOW,
+    );
+    return this.authService.forgotPassword(dto.phoneNumber, dto.email);
+  }
+
   @Public()
   @Post('verify-otp')
   @ApiOperation({ summary: 'Xác thực mã OTP' })
@@ -127,7 +207,9 @@ export class AuthController {
     @Headers('user-agent') userAgent?: string,
   ): Promise<any> {
     await this.applyRateLimit(
-      getOtpVerifyPhoneKey(verifyOtpDto.phoneNumber),
+      verifyOtpDto.email !== undefined
+        ? `rl:otp:verify:${getEmailOtpIdentifier(verifyOtpDto.email)}`
+        : getOtpVerifyPhoneKey(verifyOtpDto.phoneNumber),
       RATE_LIMIT_CONFIG.OTP_VERIFY.PHONE_LIMIT,
       RATE_LIMIT_CONFIG.OTP_VERIFY.PHONE_WINDOW,
     );
@@ -145,6 +227,7 @@ export class AuthController {
     @Body() registerDto: RegisterDto,
     @Ip() ip?: string,
     @Headers('user-agent') userAgent?: string,
+    @CurrentUser('userId') actorId?: string,
   ): Promise<{
     message: string;
     userId: string;
@@ -158,7 +241,7 @@ export class AuthController {
       RATE_LIMIT_CONFIG.REGISTER.IP_LIMIT,
       RATE_LIMIT_CONFIG.REGISTER.IP_WINDOW,
     );
-    return this.authService.register(registerDto, userAgent);
+    return this.authService.register(registerDto, userAgent, actorId);
   }
 
   @Public()
@@ -166,6 +249,8 @@ export class AuthController {
   @ApiOperation({ summary: 'Đăng nhập hệ thống bằng số điện thoại và mật khẩu' })
   @ApiResponse({ status: 200, description: 'Đăng nhập thành công trả về cặp Access & Refresh tokens' })
   @ApiResponse({ status: 401, description: 'Sai số điện thoại hoặc mật khẩu' })
+  @ApiResponse({ status: 423, description: 'Tài khoản đã bị khóa do đăng nhập sai quá số lần cho phép (ACCOUNT_PENDING_ADMIN_UNLOCK)' })
+  @ApiResponse({ status: 429, description: 'Tài khoản tạm thời bị khóa do đăng nhập sai nhiều lần (ACCOUNT_TEMPORARILY_LOCKED)' })
   async login(
     @Body() loginDto: LoginDto,
     @Ip() ip?: string,
@@ -290,8 +375,16 @@ export class AuthController {
   async logout(
     @CurrentUser('userId') userId: string,
     @Body() logoutDto: LogoutDto,
+    @Headers('authorization') authHeader?: string,
   ): Promise<{ message: string }> {
-    return this.authService.logout(userId, logoutDto.refreshToken);
+    let jti: string | undefined;
+    let exp: number | undefined;
+    if (authHeader) {
+      const claims = this.extractAccessTokenClaims(authHeader);
+      jti = claims.jti;
+      exp = claims.exp;
+    }
+    return this.authService.logout(userId, logoutDto.refreshToken, jti, exp);
   }
 
   @Post('logout-all')

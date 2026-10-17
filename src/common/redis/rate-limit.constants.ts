@@ -7,7 +7,7 @@ export const RATE_LIMIT_CONFIG = {
   LOGIN: {
     IP_LIMIT: 10,
     IP_WINDOW: 60,
-    PHONE_LIMIT: 5,
+    PHONE_LIMIT: 20,
     PHONE_WINDOW: 300,
   },
   REFRESH: {
@@ -91,4 +91,13 @@ export function getOtpSendIpKey(ip?: string | null): string {
 
 export function getOtpVerifyPhoneKey(phone?: string | null): string {
   return `rl:otp:verify:phone:${normalizePhone(phone)}`;
+}
+
+/**
+ * Redis key for Access Token blacklist.
+ * TTL = remaining lifetime of the token.
+ * Indexed by JWT `jti` (unique per token, set via jwtid option at signing time).
+ */
+export function getAccessTokenBlacklistKey(jti: string): string {
+  return `auth:blacklist:access:${jti}`;
 }
