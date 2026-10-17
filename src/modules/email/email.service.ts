@@ -1,4 +1,4 @@
-﻿import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import nodemailer, { type Transporter } from 'nodemailer';
 
@@ -65,5 +65,20 @@ AquaSense`;
     });
 
     this.logger.log(`Gửi email thông tin tài khoản thành công tới: ${email}`);
+  }
+
+  async sendNotificationEmail(
+    email: string,
+    subject: string,
+    text: string,
+  ): Promise<void> {
+    this.logger.log(`Đang gửi email thông báo tới: ${email}`);
+    await this.transporter.sendMail({
+      from: `"AquaSense Alert" <${this.emailUser || 'no-reply@aquasense.vn'}>`,
+      to: email,
+      subject,
+      text,
+    });
+    this.logger.log(`Gửi email thông báo thành công tới: ${email}`);
   }
 }

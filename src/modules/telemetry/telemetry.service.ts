@@ -9,7 +9,20 @@ import { QueryTelemetryDto } from './dto/query-telemetry.dto.js';
 import { Alert } from '../alerts/entities/alert.entity.js';
 import { AlertLevel } from '../../common/enums/alert-level.enum.js';
 import { AlertStatus } from '../../common/enums/alert-status.enum.js';
+import { ThresholdConfig } from '../ponds/entities/threshold-config.entity.js';
+import { AlertsService } from '../alerts/alerts.service.js';
 import { RedisService } from '../../common/redis/redis.service.js';
+
+const THRESHOLD_COOLDOWN_SECONDS = 15 * 60;
+const THRESHOLD_METRICS = [
+  { property: 'temperature', normalized: 'temperature' },
+  { property: 'ph', normalized: 'ph' },
+  { property: 'dissolvedOxygen', normalized: 'dissolvedoxygen' },
+  { property: 'salinity', normalized: 'salinity' },
+  { property: 'turbidity', normalized: 'turbidity' },
+] as const;
+
+type ThresholdMetricProperty = (typeof THRESHOLD_METRICS)[number]['property'];
 
 @Injectable()
 export class TelemetryService implements OnModuleInit {
@@ -22,9 +35,12 @@ export class TelemetryService implements OnModuleInit {
     private readonly deviceRepo: Repository<Device>,
     @InjectRepository(Alert)
     private readonly alertRepo: Repository<Alert>,
+    @InjectRepository(ThresholdConfig)
+    private readonly thresholdConfigRepo: Repository<ThresholdConfig>,
     private readonly dataSource: DataSource,
-    private readonly redisService?: RedisService,
-  ) {}
+    private readonly alertsService: AlertsService,
+    private readonly redisService: RedisService,
+  ) { }
 
   async onModuleInit() {
     await this.ensureTimescaleDbConfig();
@@ -76,7 +92,7 @@ export class TelemetryService implements OnModuleInit {
    * Xử lý gói tin dữ liệu cảm biến từ MQTT:
    * 1. Kiểm tra thiết bị trong CSDL (Device)
    * 2. Nếu không tìm thấy: Ghi Security Warning Log và từ chối lưu
-   * 3. Nếu hợp lệ: Lưu dữ liệu vào TimescaleDB, cập nhật thiết bị ONLINE và Publish sự kiện real-time lên Redis Pub/Sub
+   * 3. Nếu hợp lệ: Lưu TimescaleDB, cập nhật thiết bị, publish realtime và đánh giá threshold
    */
   async processTelemetryPayload(dto: CreateTelemetryDto): Promise<TelemetryData | null> {
     const device = await this.deviceRepo.findOne({
@@ -127,23 +143,255 @@ export class TelemetryService implements OnModuleInit {
       `[Telemetry] Đã lưu dữ liệu cảm biến cho thiết bị ${dto.deviceId} vào TimescaleDB.`,
     );
 
-    // Bắn sự kiện telemetry:new qua Redis Pub/Sub để TelemetryGateway đẩy xuống WebSocket client
-    if (this.redisService) {
+    try {
+      await this.redisService.publish(
+        'telemetry:new',
+        JSON.stringify({
+          pondId: device.pondId,
+          userId: device.pond?.userId || null,
+          data: savedRecord,
+        }),
+      );
+    } catch (err: any) {
+      this.logger.error(`[Redis Publish Error] Lỗi publish telemetry:new: ${err.message}`);
+    }
+
+    await this.evaluateThresholds(device, dto);
+
+    return savedRecord;
+  }
+
+  private normalizeMetricName(metricName: string): string {
+    const normalized = metricName.toLowerCase().replace(/[\s_-]/g, '');
+    if (normalized === 'temp') return 'temperature';
+    if (normalized === 'do') return 'dissolvedoxygen';
+    return normalized;
+  }
+
+  async getThresholdConfigsForPond(pondId: string): Promise<ThresholdConfig[]> {
+    const cacheKey = `cache:thresholds:${pondId}`;
+    if (this.redisService && typeof this.redisService.get === 'function') {
       try {
-        await this.redisService.publish(
-          'telemetry:new',
-          JSON.stringify({
-            pondId: device.pondId,
-            userId: device.pond?.userId || null,
-            data: savedRecord,
-          }),
-        );
+        const cached = await this.redisService.get(cacheKey);
+        if (cached) {
+          return JSON.parse(cached);
+        }
       } catch (err: any) {
-        this.logger.error(`[Redis Publish Error] Lỗi publish telemetry:new: ${err.message}`);
+        this.logger.warn(`[Redis Cache Error] Không thể đọc cache ${cacheKey}: ${err.message}`);
       }
     }
 
-    return savedRecord;
+    const configs = await this.thresholdConfigRepo.find({
+      where: { pondId, isActive: true },
+    });
+
+    if (this.redisService && typeof this.redisService.set === 'function') {
+      try {
+        await this.redisService.set(cacheKey, JSON.stringify(configs), 15 * 60);
+      } catch (err: any) {
+        this.logger.warn(`[Redis Cache Error] Không thể ghi cache ${cacheKey}: ${err.message}`);
+      }
+    }
+
+    return configs;
+  }
+
+  determineAlertLevel(
+    normalizedMetric: string,
+    value: number,
+    minValue: number,
+    maxValue: number,
+    direction: 'LOW' | 'HIGH',
+  ): AlertLevel {
+    const boundary = direction === 'LOW' ? minValue : maxValue;
+    const deviation = Math.abs(value - boundary);
+    const deviationPercent = boundary !== 0 ? deviation / boundary : 0;
+
+    // Ngưỡng nguy cấp ngành tôm:
+    // 1. Oxy hòa tan DO < 3.0 mg/L (tôm ngạt khí)
+    // 2. pH < 6.8 hoặc pH > 9.2 (sốc môi trường nặng)
+    // 3. Hoặc mức lệch ngưỡng >= 25%
+    if (
+      (normalizedMetric === 'dissolvedoxygen' && value < 3.0) ||
+      (normalizedMetric === 'ph' && (value < 6.8 || value > 9.2)) ||
+      deviationPercent >= 0.25
+    ) {
+      return AlertLevel.CRITICAL;
+    }
+
+    return AlertLevel.WARNING;
+  }
+
+  async evaluateThresholds(
+    deviceOrId: Device | string,
+    dto: CreateTelemetryDto,
+  ): Promise<void> {
+    const device =
+      typeof deviceOrId === 'string'
+        ? await this.deviceRepo.findOne({ where: { deviceId: deviceOrId } })
+        : deviceOrId;
+
+    if (!device || !device.pondId) return;
+
+    if (dto.isBuffered) {
+      this.logger.debug?.(
+        `[Alert Engine] Bỏ qua đánh giá ngưỡng cho telemetry được đệm (isBuffered: true, deviceId: ${device.deviceId}).`,
+      );
+      return;
+    }
+
+    try {
+      const configs = await this.getThresholdConfigsForPond(device.pondId);
+      const configsByMetric = new Map<string, ThresholdConfig>();
+      for (const config of configs) {
+        if (!config.isActive) continue;
+        const normalizedName = this.normalizeMetricName(config.metricName);
+        if (!configsByMetric.has(normalizedName)) {
+          configsByMetric.set(normalizedName, config);
+        }
+      }
+
+      for (const metric of THRESHOLD_METRICS) {
+        const value = dto[metric.property as ThresholdMetricProperty];
+        if (value === null || value === undefined) continue;
+
+        const config = configsByMetric.get(metric.normalized);
+        if (!config) continue;
+
+        const numericValue = Number(value);
+        const minValue = Number(config.minValue);
+        const maxValue = Number(config.maxValue);
+
+        if (
+          !Number.isFinite(numericValue) ||
+          !Number.isFinite(minValue) ||
+          !Number.isFinite(maxValue)
+        ) {
+          continue;
+        }
+
+        if (minValue > maxValue) {
+          this.logger.warn(
+            `[Alert Engine] Cấu hình ngưỡng không hợp lệ cho ao ${device.pondId}, chỉ số ${config.metricName}: minValue (${minValue}) > maxValue (${maxValue}). Bỏ qua.`,
+          );
+          continue;
+        }
+
+        const direction =
+          numericValue < minValue ? 'LOW' : numericValue > maxValue ? 'HIGH' : null;
+        if (!direction) continue;
+
+        await this.createThresholdAlert(
+          device,
+          config,
+          metric.normalized,
+          numericValue,
+          direction,
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        `[Alert Engine] Không thể đánh giá ngưỡng cho thiết bị ${device.deviceId}; dữ liệu telemetry đã được lưu.`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  private async createThresholdAlert(
+    device: Device,
+    config: ThresholdConfig,
+    normalizedMetric: string,
+    triggeredValue: number,
+    direction: 'LOW' | 'HIGH',
+  ): Promise<void> {
+    const cooldownKey = `alert:cooldown:${config.pondId}:${device.deviceId}:${normalizedMetric}:${direction}`;
+    const alertLevel = this.determineAlertLevel(
+      normalizedMetric,
+      triggeredValue,
+      Number(config.minValue),
+      Number(config.maxValue),
+      direction,
+    );
+
+    let cooldownSet = false;
+    let isEscalated = false;
+
+    try {
+      cooldownSet = await this.redisService.setIfAbsent(
+        cooldownKey,
+        '1',
+        THRESHOLD_COOLDOWN_SECONDS,
+      );
+
+      // Nếu cooldown đã tồn tại (setIfAbsent trả về false), kiểm tra xem có Delta Escalation lên CRITICAL không
+      if (!cooldownSet) {
+        if (typeof this.redisService.get === 'function') {
+          try {
+            const existingLevel = await this.redisService.get(`${cooldownKey}:level`);
+            if (alertLevel === AlertLevel.CRITICAL && existingLevel !== AlertLevel.CRITICAL) {
+              isEscalated = true;
+              this.logger.warn(
+                `[Alert Engine Escalation] Phá vỡ cooldown cho ao ${config.pondId || device.pondId}, thiết bị ${device.deviceId}, chỉ số ${config.metricName}: Thang đo nâng lên CRITICAL (giá trị: ${triggeredValue}).`,
+              );
+              if (typeof this.redisService.set === 'function') {
+                await this.redisService.set(`${cooldownKey}:level`, AlertLevel.CRITICAL, THRESHOLD_COOLDOWN_SECONDS);
+              }
+            }
+          } catch {
+            // Safe ignore
+          }
+        }
+
+        if (!isEscalated) return;
+      } else {
+        if (typeof this.redisService.set === 'function') {
+          try {
+            await this.redisService.set(`${cooldownKey}:level`, alertLevel, THRESHOLD_COOLDOWN_SECONDS);
+          } catch {
+            // Safe ignore
+          }
+        }
+      }
+
+      const alert = await this.alertsService.createThresholdAlert({
+        pondId: config.pondId,
+        deviceId: device.deviceId,
+        metricName: config.metricName,
+        triggeredValue,
+        minValue: Number(config.minValue),
+        maxValue: Number(config.maxValue),
+        direction,
+        alertLevel,
+      });
+
+      try {
+        await this.redisService.publish(
+          'alert:triggered',
+          JSON.stringify({
+            pondId: config.pondId,
+            userId: device.pond?.userId || null,
+            alert,
+          }),
+        );
+      } catch (error) {
+        this.logger.error(
+          '[Redis Publish Error] Lỗi publish alert:triggered cho threshold alert.',
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+    } catch (error) {
+      if (cooldownSet && !isEscalated) {
+        try {
+          await this.redisService.del(cooldownKey);
+        } catch (cleanupError) {
+          this.logger.error(
+            `[Alert Engine] Không thể xóa cooldown lỗi cho ${cooldownKey}.`,
+            cleanupError instanceof Error ? cleanupError.stack : String(cleanupError),
+          );
+        }
+      }
+      throw error;
+    }
   }
 
   /**
@@ -243,20 +491,17 @@ export class TelemetryService implements OnModuleInit {
         });
         const savedAlert = await this.alertRepo.save(newAlert);
 
-        // Publish alert:triggered lên Redis Pub/Sub
-        if (this.redisService) {
-          try {
-            await this.redisService.publish(
-              'alert:triggered',
-              JSON.stringify({
-                pondId: device.pondId,
-                userId: device.pond?.userId || null,
-                alert: savedAlert,
-              }),
-            );
-          } catch (err: any) {
-            this.logger.error(`[Redis Publish Error] Lỗi publish alert:triggered: ${err.message}`);
-          }
+        try {
+          await this.redisService.publish(
+            'alert:triggered',
+            JSON.stringify({
+              pondId: device.pondId,
+              userId: device.pond?.userId || null,
+              alert: savedAlert,
+            }),
+          );
+        } catch (err: any) {
+          this.logger.error(`[Redis Publish Error] Lỗi publish alert:triggered: ${err.message}`);
         }
       }
     }
