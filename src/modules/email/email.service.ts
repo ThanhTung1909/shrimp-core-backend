@@ -7,8 +7,30 @@ export class EmailService {
   private readonly logger = new Logger(EmailService.name);
   private readonly transporter: Transporter;
   private readonly emailUser?: string;
+  private readonly isMockTransport: boolean;
 
   constructor(private readonly configService: ConfigService) {
+    const mode = (this.configService.get<string>('EMAIL_MODE') || 'smtp').trim().toLowerCase();
+    const nodeEnv = (
+      this.configService.get<string>('NODE_ENV') ||
+      process.env.NODE_ENV ||
+      'development'
+    ).trim().toLowerCase();
+
+    if (mode === 'mock') {
+      if (nodeEnv !== 'development' && nodeEnv !== 'test') {
+        throw new Error('EMAIL_MODE=mock is only allowed in development or test');
+      }
+
+      this.transporter = nodemailer.createTransport({ jsonTransport: true });
+      this.isMockTransport = true;
+      return;
+    }
+
+    if (mode !== 'smtp') {
+      throw new Error(`Unsupported EMAIL_MODE: ${mode}`);
+    }
+
     const host =
       this.configService.get<string>('EMAIL_HOST') || 'smtp.gmail.com';
     const port = parseInt(
@@ -19,6 +41,10 @@ export class EmailService {
       this.configService.get<string>('EMAIL_SECURE') === 'true' || port === 465;
     this.emailUser = this.configService.get<string>('EMAIL_USER');
     const emailPass = this.configService.get<string>('EMAIL_PASS');
+    const configuredTimeout = Number(this.configService.get<string>('EMAIL_TIMEOUT_MS') || 10_000);
+    const timeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0
+      ? configuredTimeout
+      : 10_000;
 
     this.transporter = nodemailer.createTransport({
       host,
@@ -28,7 +54,24 @@ export class EmailService {
         user: this.emailUser,
         pass: emailPass,
       },
+      connectionTimeout: timeoutMs,
+      greetingTimeout: timeoutMs,
+      socketTimeout: timeoutMs,
     });
+    this.isMockTransport = false;
+  }
+
+  private assertAcceptedByTransport(
+    result: { accepted?: string[]; rejected?: string[] },
+    errorMessage: string,
+  ): void {
+    if (this.isMockTransport) {
+      return;
+    }
+
+    if (!result.accepted?.length || result.rejected?.length) {
+      throw new Error(errorMessage);
+    }
   }
 
   async sendInitialPassword(
@@ -55,7 +98,7 @@ Nếu bạn không yêu cầu tạo tài khoản này, vui lòng liên hệ qu�
 Trân trọng,
 AquaSense`;
 
-    this.logger.log(`Đang gửi email thông tin tài khoản tới: ${email}`);
+    this.logger.log('Sending initial account email');
 
     await this.transporter.sendMail({
       from: `"AquaSense" <${this.emailUser || 'no-reply@aquasense.vn'}>`,
@@ -64,7 +107,7 @@ AquaSense`;
       text,
     });
 
-    this.logger.log(`Gửi email thông tin tài khoản thành công tới: ${email}`);
+    this.logger.log('SMTP accepted initial account email');
   }
 
   async sendPasswordResetOtp(email: string, otp: string): Promise<void> {
@@ -74,9 +117,7 @@ AquaSense`;
       subject: 'Mã OTP đặt lại mật khẩu AquaSense',
       text: `Mã xác thực đặt lại mật khẩu AquaSense của bạn là: ${otp}\n\nMã có hiệu lực trong 5 phút và chỉ sử dụng một lần. Không chia sẻ mã này với bất kỳ ai.\n\nNếu bạn không yêu cầu đặt lại mật khẩu, hãy bỏ qua email này.`,
     });
-    if (!result.accepted?.length || result.rejected?.length) {
-      throw new Error('SMTP did not accept the password reset email');
-    }
+    this.assertAcceptedByTransport(result, 'SMTP did not accept the password reset email');
     this.logger.log('SMTP accepted password reset email');
   }
 
@@ -85,14 +126,15 @@ AquaSense`;
     subject: string,
     text: string,
   ): Promise<void> {
-    this.logger.log(`Đang gửi email thông báo tới: ${email}`);
-    await this.transporter.sendMail({
+    this.logger.log('Sending notification email');
+    const result = await this.transporter.sendMail({
       from: `"AquaSense Alert" <${this.emailUser || 'no-reply@aquasense.vn'}>`,
       to: email,
       subject,
       text,
     });
-    this.logger.log(`Gửi email thông báo thành công tới: ${email}`);
+    this.assertAcceptedByTransport(result, 'SMTP did not accept the notification email');
+    this.logger.log('SMTP accepted notification email');
   }
 
   /**
@@ -171,9 +213,9 @@ AquaSense`;
       </div>
     `;
 
-    this.logger.log(`Đang gửi alert email (${safeLevel}) tới: ${email}`);
+    this.logger.log(`Sending ${safeLevel} alert email`);
 
-    await this.transporter.sendMail({
+    const result = await this.transporter.sendMail({
       from: `"AquaSense Alert" <${this.emailUser || 'no-reply@aquasense.vn'}>`,
       to: email,
       subject,
@@ -181,7 +223,8 @@ AquaSense`;
       html,
     });
 
-    this.logger.log(`Gửi alert email thành công tới: ${email}`);
+    this.assertAcceptedByTransport(result, 'SMTP did not accept the alert email');
+    this.logger.log(`SMTP accepted ${safeLevel} alert email`);
   }
 }
 

@@ -5,12 +5,14 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   Index,
+  Unique,
 } from 'typeorm';
 import { NotificationChannel } from '../enums/notification-channel.enum.js';
 import { DeliveryStatus } from '../enums/delivery-status.enum.js';
 
 @Entity('notification_delivery')
-@Index(['alertId', 'userId', 'channel'])
+@Unique('uq_notification_delivery_alert_user_channel', ['alertId', 'userId', 'channel'])
+@Index('idx_notification_delivery_dedup', ['alertId', 'userId', 'channel'])
 export class NotificationDelivery {
   @PrimaryGeneratedColumn('uuid', { name: 'delivery_id' })
   deliveryId: string;

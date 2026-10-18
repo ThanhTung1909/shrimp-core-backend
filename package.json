@@ -15,6 +15,7 @@
     "start:prod": "node dist/main.js",
     "start:trace": "node --trace-deprecation dist/main.js",
     "seed": "nest build && node dist/seed.js",
+    "migrate:p1-2": "node database/run-p12-notification-migration.mjs",
     "lint": "oxlint src/ test/",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -15,7 +15,22 @@ BEGIN
         CREATE TYPE notification_channel AS ENUM ('FCM', 'SMS', 'EMAIL');
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'delivery_status') THEN
-        CREATE TYPE delivery_status AS ENUM ('PENDING', 'PROCESSING', 'SENT', 'FAILED', 'SKIPPED');
+        CREATE TYPE delivery_status AS ENUM ('PENDING', 'PROCESSING', 'PROVIDER_ACCEPTED', 'SENT', 'FAILED', 'SKIPPED');
+    END IF;
+END $$;
+
+-- Existing installations retain legacy SENT records, while newly dispatched
+-- notifications use PROVIDER_ACCEPTED to avoid claiming end-device delivery.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_enum enum
+        JOIN pg_type type ON type.oid = enum.enumtypid
+        WHERE type.typname = 'delivery_status'
+          AND enum.enumlabel = 'PROVIDER_ACCEPTED'
+    ) THEN
+        ALTER TYPE delivery_status ADD VALUE 'PROVIDER_ACCEPTED';
     END IF;
 END $$;
 
@@ -67,11 +82,29 @@ CREATE TABLE IF NOT EXISTS notification_delivery (
     failure_reason TEXT,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
-    CONSTRAINT fk_notification_delivery_user FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    CONSTRAINT fk_notification_delivery_user FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    CONSTRAINT uq_notification_delivery_alert_user_channel UNIQUE (alert_id, user_id, channel)
 );
 
 CREATE INDEX IF NOT EXISTS idx_notification_delivery_dedup ON notification_delivery(alert_id, user_id, channel);
 CREATE INDEX IF NOT EXISTS idx_notification_delivery_user_created ON notification_delivery(user_id, created_at DESC);
+
+-- Existing installations may have received the first version of this migration
+-- without the uniqueness guarantee. Fail closed if historical duplicate records
+-- must be resolved manually before a safe deduplication constraint can be added.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'notification_delivery'::regclass
+          AND conname = 'uq_notification_delivery_alert_user_channel'
+    ) THEN
+        ALTER TABLE notification_delivery
+            ADD CONSTRAINT uq_notification_delivery_alert_user_channel
+            UNIQUE (alert_id, user_id, channel);
+    END IF;
+END $$;
 
 -- --------------------------------------------------------------------
 -- DOWN MIGRATION (ROLLBACK)

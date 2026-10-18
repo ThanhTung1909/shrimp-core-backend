@@ -42,8 +42,8 @@ export class AlertsService {
     const saved = await this.alertRepo.save(alert);
 
     if (this.notificationDispatcher) {
-      void this.notificationDispatcher.dispatchAlert(saved).catch((err: any) => {
-        this.logger.error(`[AlertsService] Dispatch alert error: ${err.message}`);
+      void this.notificationDispatcher.dispatchAlert(saved).catch(() => {
+        this.logger.error('[AlertsService] Notification dispatch failed.');
       });
     }
 
@@ -64,7 +64,15 @@ export class AlertsService {
       message: `Chỉ số ${input.metricName} đo được ${input.triggeredValue}, ${comparison} ngưỡng ${boundary} (khoảng cho phép ${input.minValue} - ${input.maxValue}).`,
     });
 
-    return this.alertRepo.save(alert);
+    const saved = await this.alertRepo.save(alert);
+
+    if (this.notificationDispatcher) {
+      void this.notificationDispatcher.dispatchAlert(saved).catch(() => {
+        this.logger.error('[AlertsService] Notification dispatch failed.');
+      });
+    }
+
+    return saved;
   }
 
   async findAll(

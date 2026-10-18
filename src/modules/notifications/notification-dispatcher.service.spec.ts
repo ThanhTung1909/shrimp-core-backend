@@ -348,6 +348,35 @@ describe('NotificationDispatcherService (Scenarios 7 - 15 & 23 - 35)', () => {
     expect(mockEmailService.sendAlertEmail).toHaveBeenCalled();
   });
 
+  it('atomically yields to a concurrent worker when the unique delivery claim already exists', async () => {
+    let fcmLookupCount = 0;
+    mockDeliveryRepo.findOne.mockImplementation(async (query: any) => {
+      if (query.where.channel === NotificationChannel.FCM) {
+        fcmLookupCount += 1;
+        return fcmLookupCount === 1
+          ? null
+          : {
+              deliveryId: 'claimed-by-worker-a',
+              status: DeliveryStatus.PROCESSING,
+              attemptCount: 1,
+            };
+      }
+      return null;
+    });
+    mockDeliveryRepo.save.mockImplementation((entity: any) => {
+      if (entity.channel === NotificationChannel.FCM) {
+        return Promise.reject(Object.assign(new Error('duplicate delivery'), { code: '23505' }));
+      }
+      return Promise.resolve(entity);
+    });
+
+    await dispatcher.dispatchAlert(criticalAlert);
+
+    expect(mockFcmService.sendToTokens).not.toHaveBeenCalled();
+    expect(mockEsmsService.sendAlertSMS).toHaveBeenCalledTimes(1);
+    expect(mockEmailService.sendAlertEmail).toHaveBeenCalledTimes(1);
+  });
+
   it('Scenario 28: Queue redelivery / retry handling - cho phép thử lại khi delivery trước đó bị FAILED và chưa hết lượt retry', async () => {
     mockDeliveryRepo.findOne.mockImplementation(async (query: any) => {
       if (query.where.channel === NotificationChannel.SMS) {
@@ -366,7 +395,7 @@ describe('NotificationDispatcherService (Scenarios 7 - 15 & 23 - 35)', () => {
     expect(mockDeliveryRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
         attemptCount: 2,
-        status: DeliveryStatus.SENT,
+        status: DeliveryStatus.PROVIDER_ACCEPTED,
       }),
     );
   });
@@ -382,7 +411,7 @@ describe('NotificationDispatcherService (Scenarios 7 - 15 & 23 - 35)', () => {
     expect(mockDeliveryRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: NotificationChannel.SMS,
-        status: DeliveryStatus.SENT,
+        status: DeliveryStatus.PROVIDER_ACCEPTED,
       }),
     );
   });
@@ -438,7 +467,7 @@ describe('NotificationDispatcherService (Scenarios 7 - 15 & 23 - 35)', () => {
     );
     expect(mockDeliveryRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: DeliveryStatus.SENT,
+        status: DeliveryStatus.PROVIDER_ACCEPTED,
         sentAt: expect.any(Date),
       }),
     );

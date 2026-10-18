@@ -9,6 +9,28 @@ export class EsmsService {
 
   constructor(private readonly configService: ConfigService) {}
 
+  private getTimeoutMs(): number {
+    const configured = Number(this.configService.get<string>('ESMS_TIMEOUT_MS') || 10_000);
+    return Number.isFinite(configured) && configured > 0 ? configured : 10_000;
+  }
+
+  private async postToGateway(payload: Record<string, unknown>): Promise<string> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.getTimeoutMs());
+
+    try {
+      const response = await fetch(this.apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      return await response.text();
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   /**
    * Gọi API eSMS qua phương thức POST (SmsType=2, Brandname)
    * @param phone Số điện thoại người nhận
@@ -83,15 +105,7 @@ export class EsmsService {
     this.logger.debug('Sending SMS request to eSMS');
 
     try {
-      const response = await fetch(this.apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const text = await response.text();
+      const text = await this.postToGateway(payload);
 
       // Kiểm tra nếu response trả về XML/HTML lỗi
       if (text.trim().startsWith('<')) {
@@ -131,6 +145,37 @@ export class EsmsService {
    * @param message Nội dung cảnh báo cần gửi
    */
   async sendAlertSMS(phone: string, message: string): Promise<any> {
+    const mode = (
+      this.configService.get<string>('SMS_MODE') || 'esms'
+    ).trim().toLowerCase();
+    const nodeEnv = (
+      this.configService.get<string>('NODE_ENV') ||
+      process.env.NODE_ENV ||
+      'development'
+    ).trim().toLowerCase();
+
+    if (mode === 'mock') {
+      if (nodeEnv !== 'development' && nodeEnv !== 'test') {
+        this.logger.error(`SMS_MODE=mock bị từ chối trong NODE_ENV=${nodeEnv}`);
+        throw new InternalServerErrorException(
+          'SMS mock chỉ được phép trong môi trường development hoặc test',
+        );
+      }
+
+      this.logger.warn('SMS mock transport accepted an alert delivery request');
+      return {
+        CodeResult: '100',
+        ErrorMessage: '',
+        SMSID: `mock-${randomUUID()}`,
+        IsMock: true,
+      };
+    }
+
+    if (mode !== 'esms') {
+      this.logger.error(`SMS_MODE không hợp lệ: ${mode}`);
+      throw new InternalServerErrorException('Lỗi cấu hình SMS Gateway');
+    }
+
     const apiKey = this.configService.get<string>('ESMS_API_KEY');
     const secretKey = this.configService.get<string>('ESMS_SECRET_KEY');
 
@@ -152,21 +197,14 @@ export class EsmsService {
       IsUnicode: '0',
     };
 
-    this.logger.debug(`Sending Alert SMS to eSMS. Payload: ${JSON.stringify({ ...payload, SecretKey: '***' })}`);
+    // Payload contains recipient and alert data. Keep it out of application logs.
+    this.logger.debug('Sending alert SMS request to eSMS');
 
     try {
-      const response = await fetch(this.apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const text = await response.text();
+      const text = await this.postToGateway(payload);
 
       if (text.trim().startsWith('<')) {
-        this.logger.error(`eSMS returned XML/HTML error page: ${text}`);
+        this.logger.error('eSMS returned an invalid XML/HTML response');
         throw new InternalServerErrorException('eSMS Gateway trả về định dạng không hợp lệ (XML/HTML).');
       }
 
@@ -174,24 +212,24 @@ export class EsmsService {
       try {
         data = JSON.parse(text);
       } catch {
-        this.logger.error(`Failed to parse eSMS JSON response. Raw text: ${text}`);
+        this.logger.error('Failed to parse eSMS JSON response');
         throw new InternalServerErrorException('Không thể phân tích phản hồi từ eSMS Gateway.');
       }
 
-      this.logger.debug(`Response from eSMS: ${JSON.stringify(data)}`);
+      this.logger.debug('Received eSMS alert response');
 
       if (data.CodeResult !== '100') {
-        const errorMsg = `eSMS Error [Code ${data.CodeResult}]: ${data.ErrorMessage}`;
+        const errorMsg = `eSMS rejected the alert request (code ${data.CodeResult})`;
         this.logger.error(errorMsg);
         throw new InternalServerErrorException(errorMsg);
       }
 
-      this.logger.log(`Gửi Alert SMS thành công tới ${normalizedPhone}, RefId: ${data.SMSID}`);
+      this.logger.log('eSMS accepted the alert delivery request');
       return data;
-    } catch (error: any) {
-      this.logger.error(`Lỗi kết nối hoặc xử lý eSMS Alert: ${error.message}`);
+    } catch {
+      this.logger.error('Unable to send alert SMS through eSMS');
       throw new InternalServerErrorException(
-        error.message || 'Không thể kết nối đến hệ thống gửi SMS',
+        'Không thể kết nối đến hệ thống gửi SMS',
       );
     }
   }

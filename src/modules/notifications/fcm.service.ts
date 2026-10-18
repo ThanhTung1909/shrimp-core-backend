@@ -60,10 +60,10 @@ export class FcmService implements OnModuleInit {
       this.logger.warn(
         '[FcmService] Firebase credentials not configured. Operating in FCM_RUNTIME_BLOCKED mode.',
       );
-    } catch (error: any) {
+    } catch {
       this.isInitialized = false;
       this.runtimeStatus = 'FCM_RUNTIME_BLOCKED';
-      this.logger.error(`[FcmService] Firebase initialization failed: ${error.message}`);
+      this.logger.error('[FcmService] Firebase initialization failed.');
     }
   }
 
@@ -135,8 +135,8 @@ export class FcmService implements OnModuleInit {
         failureCount: response.failureCount,
         invalidTokens,
       };
-    } catch (error: any) {
-      this.logger.error(`[FcmService] Error sending multicast: ${error.message}`);
+    } catch (error) {
+      this.logger.error('[FcmService] Error sending multicast.');
       throw error;
     }
   }

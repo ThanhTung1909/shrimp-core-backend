@@ -50,9 +50,7 @@ export class NotificationDispatcherService {
    */
   async dispatchAlert(alert: Alert | AlertDispatchPayload): Promise<void> {
     try {
-      this.logger.log(
-        `[Dispatcher] Processing alert ${alert.alertId} (${alert.alertLevel}) for pond ${alert.pondId}`,
-      );
+      this.logger.log(`[Dispatcher] Processing ${alert.alertLevel} alert.`);
 
       // 1. Resolve Recipient qua Ao nuôi (Pond) -> Chủ ao (User)
       const pond = await this.pondRepo.findOne({
@@ -61,9 +59,7 @@ export class NotificationDispatcherService {
       });
 
       if (!pond) {
-        this.logger.warn(
-          `[Dispatcher] Pond ${alert.pondId} not found. Skipping notification dispatch.`,
-        );
+        this.logger.warn('[Dispatcher] Alert pond not found. Skipping notification dispatch.');
         return;
       }
 
@@ -75,18 +71,14 @@ export class NotificationDispatcherService {
       }
 
       if (!resolvedUser) {
-        this.logger.warn(
-          `[Dispatcher] Owner not found for pond ${pond.pondName} (${pond.pondId}). Skipping.`,
-        );
+        this.logger.warn('[Dispatcher] Alert owner not found. Skipping notification dispatch.');
         return;
       }
       const user: User = resolvedUser;
 
       // Scenario 35: Inactive user excluded
       if (user.isActive === false) {
-        this.logger.warn(
-          `[Dispatcher] User ${user.userId} (${user.fullName}) is INACTIVE. Dispatch aborted.`,
-        );
+        this.logger.warn('[Dispatcher] Alert owner is inactive. Dispatch aborted.');
         return;
       }
 
@@ -103,13 +95,10 @@ export class NotificationDispatcherService {
       );
 
       await Promise.allSettled(channelPromises);
-      this.logger.log(`[Dispatcher] Completed multi-channel dispatch for alert ${alert.alertId}`);
-    } catch (err: any) {
+      this.logger.log('[Dispatcher] Completed multi-channel dispatch.');
+    } catch {
       // Telemetry processing must not be blocked or crash
-      this.logger.error(
-        `[Dispatcher] Unhandled error during alert dispatch: ${err.message}`,
-        err.stack,
-      );
+      this.logger.error('[Dispatcher] Unhandled error during alert dispatch.');
     }
   }
 
@@ -146,12 +135,51 @@ export class NotificationDispatcherService {
         channel,
       },
     });
+    let createdByThisDispatch = false;
 
-    if (delivery) {
+    if (!delivery) {
+      // The database uniqueness constraint makes this create operation the
+      // atomic ownership claim for a channel delivery. A competing worker
+      // receives a duplicate-key error and observes the winner's state below.
+      const newDelivery = this.deliveryRepo.create({
+        alertId: alert.alertId,
+        userId: user.userId,
+        channel,
+        status: DeliveryStatus.PROCESSING,
+        attemptCount: 1,
+        lastAttemptAt: new Date(),
+      });
+
+      try {
+        delivery = await this.deliveryRepo.save(newDelivery);
+        createdByThisDispatch = true;
+      } catch (error: any) {
+        if (error?.code !== '23505') {
+          throw error;
+        }
+
+        delivery = await this.deliveryRepo.findOne({
+          where: {
+            alertId: alert.alertId,
+            userId: user.userId,
+            channel,
+          },
+        });
+
+        if (!delivery) {
+          throw error;
+        }
+      }
+    }
+
+    if (!createdByThisDispatch) {
       // Scenario 31: Already sent channel not resent
-      if (delivery.status === DeliveryStatus.SENT) {
+      if (
+        delivery.status === DeliveryStatus.PROVIDER_ACCEPTED ||
+        delivery.status === DeliveryStatus.SENT
+      ) {
         this.logger.debug(
-          `[Dispatcher] Channel ${channel} for alert ${alert.alertId} was already SENT. Skipping.`,
+          `[Dispatcher] Channel ${channel} was already accepted by the provider. Skipping.`,
         );
         return;
       }
@@ -159,7 +187,7 @@ export class NotificationDispatcherService {
       // Scenario 34: Concurrent worker processing guard
       if (delivery.status === DeliveryStatus.PROCESSING) {
         this.logger.debug(
-          `[Dispatcher] Channel ${channel} for alert ${alert.alertId} is currently PROCESSING. Skipping.`,
+          `[Dispatcher] Channel ${channel} is currently PROCESSING. Skipping.`,
         );
         return;
       }
@@ -170,7 +198,7 @@ export class NotificationDispatcherService {
         delivery.attemptCount >= this.maxRetries
       ) {
         this.logger.warn(
-          `[Dispatcher] Channel ${channel} for alert ${alert.alertId} exhausted all ${this.maxRetries} retries.`,
+          `[Dispatcher] Channel ${channel} exhausted all ${this.maxRetries} retries.`,
         );
         return;
       }
@@ -180,17 +208,6 @@ export class NotificationDispatcherService {
       delivery.attemptCount += 1;
       delivery.lastAttemptAt = new Date();
       await this.deliveryRepo.save(delivery);
-    } else {
-      // Create new Delivery Record
-      delivery = this.deliveryRepo.create({
-        alertId: alert.alertId,
-        userId: user.userId,
-        channel,
-        status: DeliveryStatus.PROCESSING,
-        attemptCount: 1,
-        lastAttemptAt: new Date(),
-      });
-      delivery = await this.deliveryRepo.save(delivery);
     }
 
     // 3. Thực thi gửi theo từng channel
@@ -208,9 +225,7 @@ export class NotificationDispatcherService {
       }
     } catch (channelError: any) {
       // Partial channel failure isolation
-      this.logger.error(
-        `[Dispatcher] Failure in channel ${channel} for alert ${alert.alertId}: ${channelError.message}`,
-      );
+      this.logger.error(`[Dispatcher] Failure in channel ${channel}; delivery was recorded as failed.`);
       delivery.status = DeliveryStatus.FAILED;
       delivery.failureCode = `${channel}_ERROR`;
       delivery.failureReason = channelError.message;
@@ -252,7 +267,8 @@ export class NotificationDispatcherService {
     }
 
     if (result.successCount > 0) {
-      delivery.status = DeliveryStatus.SENT;
+      // This is not proof that the device displayed the push notification.
+      delivery.status = DeliveryStatus.PROVIDER_ACCEPTED;
       delivery.sentAt = new Date();
       delivery.failureCode = null;
       delivery.failureReason = null;
@@ -286,7 +302,8 @@ export class NotificationDispatcherService {
 
     try {
       await this.esmsService.sendAlertSMS(user.phoneNumber, message);
-      delivery.status = DeliveryStatus.SENT;
+      // eSMS accepted the request; handset delivery is not tracked.
+      delivery.status = DeliveryStatus.PROVIDER_ACCEPTED;
       delivery.sentAt = new Date();
       delivery.failureCode = null;
       delivery.failureReason = null;
@@ -327,7 +344,8 @@ export class NotificationDispatcherService {
         message: alert.message || undefined,
       });
 
-      delivery.status = DeliveryStatus.SENT;
+      // SMTP accepted the message; inbox delivery is not tracked.
+      delivery.status = DeliveryStatus.PROVIDER_ACCEPTED;
       delivery.sentAt = new Date();
       delivery.failureCode = null;
       delivery.failureReason = null;

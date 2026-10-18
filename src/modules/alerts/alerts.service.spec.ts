@@ -76,6 +76,7 @@ describe('AlertsService', () => {
         }),
       );
       expect(result.alertId).toBe('alert-1');
+      expect(mockDispatcher.dispatchAlert).toHaveBeenCalledWith(result);
     });
 
     it('describes high threshold violations in Vietnamese', async () => {

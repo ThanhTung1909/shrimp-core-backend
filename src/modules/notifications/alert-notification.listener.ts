@@ -1,8 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { RedisService } from '../../common/redis/redis.service.js';
-import { UsersService } from '../users/users.service.js';
-import { NotificationQueueService } from './notification-queue.service.js';
 import { AlertLevel } from '../../common/enums/alert-level.enum.js';
+import { NotificationDispatcherService } from './notification-dispatcher.service.js';
 import type { Redis } from 'ioredis';
 
 export interface AlertTriggeredEventPayload {
@@ -27,8 +26,7 @@ export class AlertNotificationListener implements OnModuleInit, OnModuleDestroy 
 
   constructor(
     private readonly redisService: RedisService,
-    private readonly usersService: UsersService,
-    private readonly notificationQueueService: NotificationQueueService,
+    private readonly notificationDispatcher: NotificationDispatcherService,
   ) {}
 
   onModuleInit() {
@@ -77,77 +75,30 @@ export class AlertNotificationListener implements OnModuleInit, OnModuleDestroy 
   async handleAlertMessage(rawMessage: string): Promise<void> {
     try {
       const payload = JSON.parse(rawMessage) as AlertTriggeredEventPayload;
-      const { pondId, userId, alert } = payload;
+      const { pondId, alert } = payload;
 
       if (!alert) return;
 
-      this.logger.log(
-        `[Alert Listener] Nhận sự kiện cảnh báo ao ${pondId || alert.pondId}: [${alert.alertLevel || AlertLevel.WARNING}] ${alert.message}`,
-      );
-
-      if (!userId) {
-        this.logger.debug?.('[Alert Listener] Cảnh báo không có userId chủ sở hữu, bỏ qua dispatch notification.');
+      const resolvedPondId = pondId || alert.pondId;
+      if (!alert.alertId || !resolvedPondId || !alert.metricName || alert.triggeredValue === undefined) {
+        this.logger.warn('[Alert Listener] Event thiếu dữ liệu alert cần thiết, bỏ qua dispatch notification.');
         return;
       }
 
-      const user = await this.usersService.findById(userId);
-      if (!user) {
-        this.logger.warn(`[Alert Listener] Không tìm thấy thông tin user có ID: ${userId}`);
-        return;
-      }
-
-      const alertTitle =
-        alert.alertLevel === AlertLevel.CRITICAL
-          ? `[BÁO ĐỘNG ĐỎ] Nguy cấp ao nuôi ${pondId || ''}`
-          : `[CẢNH BÁO] Biến động chỉ số ao nuôi ${pondId || ''}`;
-
-      const alertBody = alert.message || 'Chỉ số môi trường vượt ngưỡng an toàn cho phép!';
-
-      // 1. Luôn ưu tiên Push Notification qua FCM nếu người dùng đã đăng ký thiết bị di động
-      if (user.fcmToken) {
-        await this.notificationQueueService.addSendFcmJob(
-          {
-            fcmToken: user.fcmToken,
-            title: alertTitle,
-            body: alertBody,
-            data: {
-              alertId: alert.alertId || '',
-              pondId: pondId || '',
-              alertLevel: alert.alertLevel || AlertLevel.WARNING,
-            },
-          },
-          { priority: 1, attempts: 3 },
-        );
-      }
-
-      // 2. Nếu cảnh báo ở cấp độ CRITICAL: Bắn SMS khẩn cấp tới số điện thoại chủ ao
-      if (alert.alertLevel === AlertLevel.CRITICAL && user.phoneNumber) {
-        const smsContent = `[SHRIMP ALERT] NGUY CAP: ${alertBody}`;
-        await this.notificationQueueService.addSendSmsJob(
-          user.phoneNumber,
-          smsContent,
-          { priority: 1, attempts: 3 },
-        );
-        this.logger.warn(`[Alert Listener] Đã đẩy job gửi SMS khẩn cấp tới ${user.phoneNumber}`);
-      }
-
-      // 3. Gửi Email thông báo nếu user có đăng ký địa chỉ email
-      if (user.email) {
-        await this.notificationQueueService.addSendEmailJob(
-          {
-            type: 'general',
-            email: user.email,
-            subject: alertTitle,
-            text: alertBody,
-          },
-          { priority: 1, attempts: 3 },
-        );
-      }
-    } catch (error: any) {
-      this.logger.error(
-        `[Alert Listener Error] Lỗi xử lý dispatch thông báo từ event alert:triggered: ${error.message}`,
-        error.stack,
-      );
+      // Every alert event uses the canonical dispatcher. It resolves the pond
+      // owner, evaluates channel preferences, records delivery state, and
+      // sends via the real FCM/eSMS/email services. This avoids a second,
+      // preference-bypassing notification path.
+      await this.notificationDispatcher.dispatchAlert({
+        alertId: alert.alertId,
+        pondId: resolvedPondId,
+        metricName: alert.metricName,
+        triggeredValue: alert.triggeredValue,
+        alertLevel: alert.alertLevel || AlertLevel.WARNING,
+        message: alert.message,
+      });
+    } catch {
+      this.logger.error('[Alert Listener] Notification dispatch from alert event failed.');
     }
   }
 }
