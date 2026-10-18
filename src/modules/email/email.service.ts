@@ -67,6 +67,34 @@ AquaSense`;
     this.logger.log(`Gửi email thông tin tài khoản thành công tới: ${email}`);
   }
 
+  async sendPasswordResetOtp(email: string, otp: string): Promise<void> {
+    const result = await this.transporter.sendMail({
+      from: `"AquaSense" <${this.emailUser || 'no-reply@aquasense.vn'}>`,
+      to: email,
+      subject: 'Mã OTP đặt lại mật khẩu AquaSense',
+      text: `Mã xác thực đặt lại mật khẩu AquaSense của bạn là: ${otp}\n\nMã có hiệu lực trong 5 phút và chỉ sử dụng một lần. Không chia sẻ mã này với bất kỳ ai.\n\nNếu bạn không yêu cầu đặt lại mật khẩu, hãy bỏ qua email này.`,
+    });
+    if (!result.accepted?.length || result.rejected?.length) {
+      throw new Error('SMTP did not accept the password reset email');
+    }
+    this.logger.log('SMTP accepted password reset email');
+  }
+
+  async sendNotificationEmail(
+    email: string,
+    subject: string,
+    text: string,
+  ): Promise<void> {
+    this.logger.log(`Đang gửi email thông báo tới: ${email}`);
+    await this.transporter.sendMail({
+      from: `"AquaSense Alert" <${this.emailUser || 'no-reply@aquasense.vn'}>`,
+      to: email,
+      subject,
+      text,
+    });
+    this.logger.log(`Gửi email thông báo thành công tới: ${email}`);
+  }
+
   /**
    * Escape HTML special characters to prevent HTML/XSS injection in alert emails.
    */
@@ -156,3 +184,4 @@ AquaSense`;
     this.logger.log(`Gửi alert email thành công tới: ${email}`);
   }
 }
+

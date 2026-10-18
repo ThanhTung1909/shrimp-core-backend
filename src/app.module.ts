@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TelemetryModule } from './modules/telemetry/telemetry.module.js';
 import { UsersModule } from './modules/users/users.module.js';
@@ -9,15 +11,32 @@ import { AlertsModule } from './modules/alerts/alerts.module.js';
 import { PredictionsModule } from './modules/predictions/predictions.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { RedisModule } from './common/redis/redis.module.js';
+import { RedisService } from './common/redis/redis.service.js';
+import { RedisThrottlerStorage } from './common/redis/redis-throttler.storage.js';
+import { QueueModule } from './common/queues/queue.module.js';
+import { NotificationsModule } from './modules/notifications/notifications.module.js';
 
 import { ScheduleModule } from '@nestjs/schedule';
 import { EsmsModule } from './common/esms/esms.module.js';
-import { NotificationsModule } from './modules/notifications/notifications.module.js';
+import { HttpThrottlerGuard } from './common/guards/http-throttler.guard.js';
 
 @Module({
   imports: [
     // Load biến môi trường toàn cục
     ConfigModule.forRoot({ isGlobal: true }),
+    ThrottlerModule.forRootAsync({
+      imports: [RedisModule],
+      inject: [RedisService],
+      useFactory: (redisService: RedisService) => ({
+        throttlers: [
+          {
+            ttl: 60_000,
+            limit: 60,
+          },
+        ],
+        storage: new RedisThrottlerStorage(redisService),
+      }),
+    }),
     ScheduleModule.forRoot(),
 
     // Kết nối CSDL TimescaleDB
@@ -41,9 +60,14 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 
     // Module lưu trữ dữ liệu in-memory Redis (Global)
     RedisModule,
-    
+
+    // Module Message Queue BullMQ (Redis Streams)
+    QueueModule,
     // Module SMS (Global)
     EsmsModule,
+
+    // Module Thông báo nền (Email, SMS, FCM)
+    NotificationsModule,
 
     // Các modules thực thể cốt lõi
     UsersModule,
@@ -54,11 +78,13 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 
     // Module quản lý dữ liệu cảm biến chuỗi thời gian
     TelemetryModule,
-
-    // Module thông báo đa kênh (FCM Push, SMS, Email)
-    NotificationsModule,
   ],
   controllers: [],
-  providers: [],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: HttpThrottlerGuard,
+    },
+  ],
 })
-export class AppModule {}
+export class AppModule { }

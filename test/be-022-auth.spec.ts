@@ -1,18 +1,20 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { AuthService } from '../src/modules/auth/auth.service';
-import { UsersService } from '../src/modules/users/users.service';
-import { OtpService } from '../src/modules/auth/otp.service';
+import { AuthService } from '../src/modules/auth/auth.service.js';
+import { UsersService } from '../src/modules/users/users.service.js';
+import { OtpService } from '../src/modules/auth/otp.service.js';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { UserSession } from '../src/modules/auth/entities/user-session.entity';
+import { UserSession } from '../src/modules/auth/entities/user-session.entity.js';
 import { DataSource } from 'typeorm';
-import { EmailService } from '../src/modules/email/email.service';
-import { EsmsService } from '../src/common/esms/esms.service';
+import { EmailService } from '../src/modules/email/email.service.js';
+import { EsmsService } from '../src/common/esms/esms.service.js';
 import { OtpPurpose } from '../src/common/redis/otp.constants.js';
-import { UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { UnauthorizedException, BadRequestException, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { LoginLockoutService } from '../src/common/redis/login-lockout.service.js';
+import { authLockoutFixture } from './helpers/auth-lockout-fixture.js';
 
 vi.mock('bcrypt', () => ({
   compare: vi.fn(),
@@ -62,6 +64,7 @@ describe('BE-022 Authentication Tests', () => {
         { provide: DataSource, useValue: dataSource },
         { provide: EmailService, useValue: {} },
         { provide: EsmsService, useValue: { sendSMS: vi.fn() } },
+        { provide: LoginLockoutService, useValue: authLockoutFixture(usersService, dataSource) },
       ],
     }).compile();
 
@@ -77,7 +80,7 @@ describe('BE-022 Authentication Tests', () => {
     });
 
     it('should reject reset password if OTP verification marker is invalid or expired', async () => {
-      usersService.findByPhoneNumber.mockResolvedValue({ userId: '1', isActive: true });
+      usersService.findByPhoneNumber.mockResolvedValue({ userId: '1', phoneNumber: '0901234567', isActive: true });
       otpService.consumePhoneVerified.mockResolvedValue(false);
 
       await expect(
@@ -87,7 +90,7 @@ describe('BE-022 Authentication Tests', () => {
     });
 
     it('should successfully reset password, increment tokenVersion and revoke old sessions', async () => {
-      usersService.findByPhoneNumber.mockResolvedValue({ userId: 'u1', isActive: true });
+      usersService.findByPhoneNumber.mockResolvedValue({ userId: 'u1', phoneNumber: '0901234567', isActive: true });
       otpService.consumePhoneVerified.mockResolvedValue(true);
 
       const res = await authService.resetPassword({ phoneNumber: '0901234567', newPassword: 'Password123' });
@@ -102,11 +105,12 @@ describe('BE-022 Authentication Tests', () => {
       );
     });
 
-    it('should not leak user existence on send-otp for RESET_PASSWORD', async () => {
+    it('should reject send-otp for RESET_PASSWORD if user not found', async () => {
       usersService.findByPhoneNumber.mockResolvedValue(null); // User not found
 
-      const res = await authService.sendOtp({ phoneNumber: '0901234567', purpose: OtpPurpose.RESET_PASSWORD });
-      expect(res.message).toContain('Nếu số điện thoại hợp lệ, mã OTP đã được gửi');
+      await expect(
+        authService.sendOtp({ phoneNumber: '0901234567', purpose: OtpPurpose.RESET_PASSWORD }),
+      ).rejects.toThrow(NotFoundException);
       expect(otpService.createAndSaveOtp).not.toHaveBeenCalled(); // Ensure SMS isn't sent
     });
   });

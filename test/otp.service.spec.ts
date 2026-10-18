@@ -17,6 +17,7 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
   let otpService: OtpService;
   let authService: AuthService;
   let usersService: any;
+  let esmsService: any;
 
   const testId = Date.now();
   let phoneSeq = 1000;
@@ -49,6 +50,7 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
     usersService = {
       findByPhoneNumber: vi.fn().mockResolvedValue(null),
     };
+    esmsService = { sendSMS: vi.fn().mockResolvedValue(undefined) };
 
     authService = new AuthService(
       usersService,
@@ -56,6 +58,8 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
       {} as any,
       {} as any,
       {} as any,
+      { sendInitialPassword: vi.fn() } as any,
+      esmsService,
       otpService,
     );
   });
@@ -100,7 +104,7 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
       const phone = getNextPhone();
       await otpService.createAndSaveOtp(OtpPurpose.REGISTER, phone);
 
-      const ttl = await redisService.ttl(getOtpCodeKey(phone));
+      const ttl = await redisService.ttl(getOtpCodeKey(OtpPurpose.REGISTER, phone));
       expect(ttl).toBeGreaterThan(0);
       expect(ttl).toBeLessThanOrEqual(OTP_CONFIG.TTL_SECONDS);
     });
@@ -112,7 +116,7 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
       const attempts = await otpService.getOtpAttempts(OtpPurpose.REGISTER, phone);
       expect(attempts).toBe(0);
 
-      const attemptsTtl = await redisService.ttl(getOtpAttemptsKey(phone));
+      const attemptsTtl = await redisService.ttl(getOtpAttemptsKey(OtpPurpose.REGISTER, phone));
       expect(attemptsTtl).toBeGreaterThan(0);
       expect(attemptsTtl).toBeLessThanOrEqual(OTP_CONFIG.TTL_SECONDS);
     });
@@ -127,14 +131,14 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
       expect(result).toBe(true);
 
       // OTP key and attempts must be deleted immediately
-      expect(await redisService.exists(getOtpCodeKey(phone))).toBe(0);
-      expect(await redisService.exists(getOtpAttemptsKey(phone))).toBe(0);
+      expect(await redisService.exists(getOtpCodeKey(OtpPurpose.REGISTER, phone))).toBe(0);
+      expect(await redisService.exists(getOtpAttemptsKey(OtpPurpose.REGISTER, phone))).toBe(0);
 
       // Verified marker must exist with TTL <= 600s
       const verified = await otpService.isPhoneVerified(OtpPurpose.REGISTER, phone);
       expect(verified).toBe(true);
 
-      const markerTtl = await redisService.ttl(getOtpVerifiedKey(phone));
+      const markerTtl = await redisService.ttl(getOtpVerifiedKey(OtpPurpose.REGISTER, phone));
       expect(markerTtl).toBeGreaterThan(0);
       expect(markerTtl).toBeLessThanOrEqual(OTP_CONFIG.VERIFIED_TTL_SECONDS);
     });
@@ -176,8 +180,8 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
       await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phone, '000000')).rejects.toThrow(BadRequestException);
 
       // Code and attempts keys must be deleted
-      expect(await redisService.exists(getOtpCodeKey(phone))).toBe(0);
-      expect(await redisService.exists(getOtpAttemptsKey(phone))).toBe(0);
+      expect(await redisService.exists(getOtpCodeKey(OtpPurpose.REGISTER, phone))).toBe(0);
+      expect(await redisService.exists(getOtpAttemptsKey(OtpPurpose.REGISTER, phone))).toBe(0);
     });
 
     it('Test 10 — Sixth attempt cannot work even with correct OTP', async () => {
@@ -233,7 +237,7 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
 
       await otpService.verifyOtp(OtpPurpose.REGISTER, phone, otp);
 
-      const ttl = await redisService.ttl(getOtpVerifiedKey(phone));
+      const ttl = await redisService.ttl(getOtpVerifiedKey(OtpPurpose.REGISTER, phone));
       expect(ttl).toBeGreaterThan(0);
       expect(ttl).toBeLessThanOrEqual(600);
     });
@@ -249,7 +253,7 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
       await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phoneA, otpA)).resolves.toBe(true);
 
       // B is still intact and can be verified
-      expect(await redisService.exists(getOtpCodeKey(phoneB))).toBe(1);
+      expect(await redisService.exists(getOtpCodeKey(OtpPurpose.REGISTER, phoneB))).toBe(1);
       await expect(otpService.verifyOtp(OtpPurpose.REGISTER, phoneB, otpB)).resolves.toBe(true);
     });
   });
@@ -301,19 +305,21 @@ describe('OTP SECURITY WITH REDIS SUITE', () => {
     it('Test 17 — AuthService sendOtp and verifyOtp works seamlessly with OtpService', async () => {
       const phone = getNextPhone();
 
-      const sendRes = await authService.sendOtp({ phoneNumber: phone });
+      const sendRes = await authService.sendOtp({ phoneNumber: phone, purpose: OtpPurpose.REGISTER });
       expect(sendRes.message).toBe('Mã OTP đã được gửi thành công!');
       expect(sendRes.phoneNumber).toBe(phone);
       expect(sendRes.expiresIn).toBe('5 phút');
-      expect(sendRes.otp).toBeDefined();
+      expect(sendRes).not.toHaveProperty('otp');
+      expect(esmsService.sendSMS).toHaveBeenCalledWith(phone, expect.any(String));
+      const deliveredOtp = esmsService.sendSMS.mock.calls[0][1];
 
-      const verifyRes = await authService.verifyOtp(OtpPurpose.REGISTER, { phoneNumber: phone, otp: sendRes.otp! });
+      const verifyRes = await authService.verifyOtp({ phoneNumber: phone, otp: deliveredOtp, purpose: OtpPurpose.REGISTER });
       expect(verifyRes.message).toBe('Xác thực OTP thành công!');
       expect(verifyRes.isValid).toBe(true);
 
       // One-time check: verifying again throws BadRequestException
       await expect(
-        authService.verifyOtp(OtpPurpose.REGISTER, { phoneNumber: phone, otp: sendRes.otp! }),
+        authService.verifyOtp({ phoneNumber: phone, otp: deliveredOtp, purpose: OtpPurpose.REGISTER }),
       ).rejects.toThrow(BadRequestException);
     });
   });

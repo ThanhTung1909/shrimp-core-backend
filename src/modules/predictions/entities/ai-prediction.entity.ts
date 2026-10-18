@@ -45,6 +45,14 @@ export class AiPrediction {
   })
   riskLevel: RiskLevel;
 
+  // Cờ nhận biết kết quả từ AI Microservice hay từ mô hình Heuristic Fallback
+  @Column({ name: 'is_fallback', type: 'boolean', default: false })
+  isFallback: boolean;
+
+  // Nguồn gốc tính toán dự báo: 'AI_MICROSERVICE' hoặc 'HEURISTIC_RULE'
+  @Column({ name: 'prediction_source', type: 'varchar', length: 50, default: 'AI_MICROSERVICE' })
+  predictionSource: string;
+
   // Quan hệ ManyToOne với Pond: 1 Ao nuôi có thể có nhiều bản ghi dự báo lịch sử và tương lai
   @ManyToOne(() => Pond, (pond) => pond.predictions, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'pond_id' })

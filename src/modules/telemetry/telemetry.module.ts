@@ -9,10 +9,13 @@ import { TelemetryService } from './telemetry.service.js';
 import { TelemetryMqttService } from './telemetry-mqtt.service.js';
 import { TelemetryController } from './telemetry.controller.js';
 import { DeviceHealthService } from './device-health.service.js';
+import { ThresholdConfig } from '../ponds/entities/threshold-config.entity.js';
+import { AlertsModule } from '../alerts/alerts.module.js';
 import { TelemetryGateway } from './telemetry.gateway.js';
 import { RedisModule } from '../../common/redis/redis.module.js';
 import { PondsModule } from '../ponds/ponds.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
+import { UsersModule } from '../users/users.module.js';
 
 @Module({
   imports: [
@@ -20,7 +23,9 @@ import { NotificationsModule } from '../notifications/notifications.module.js';
     RedisModule,
     NotificationsModule,
     forwardRef(() => PondsModule),
-    TypeOrmModule.forFeature([TelemetryData, Device, Alert]),
+    UsersModule,
+    TypeOrmModule.forFeature([TelemetryData, Device, Alert, ThresholdConfig]),
+    AlertsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -40,11 +45,6 @@ import { NotificationsModule } from '../notifications/notifications.module.js';
     DeviceHealthService,
     TelemetryGateway,
   ],
-  exports: [
-    TelemetryService,
-    TelemetryMqttService,
-    TelemetryGateway,
-    TypeOrmModule,
-  ],
+  exports: [TelemetryService, TelemetryMqttService, TelemetryGateway, TypeOrmModule],
 })
 export class TelemetryModule {}
