@@ -39,6 +39,7 @@ export class AiPrediction {
 
   // Phân loại rủi ro: LOW, MEDIUM, HIGH
   @Column({
+    name: 'risk_level',
     type: 'enum',
     enum: RiskLevel,
     enumName: 'risk_level',
