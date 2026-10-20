@@ -9,8 +9,11 @@ describe('AlertsService', () => {
   let service: AlertsService;
   let alertRepo: any;
   let queryBuilder: any;
+  let mockDispatcher: any;
 
   beforeEach(() => {
+    vi.clearAllMocks();
+
     queryBuilder = {
       leftJoinAndSelect: vi.fn().mockReturnThis(),
       andWhere: vi.fn().mockReturnThis(),
@@ -20,12 +23,33 @@ describe('AlertsService', () => {
       getManyAndCount: vi.fn().mockResolvedValue([[{ alertId: 'alert-1' }], 1]),
     };
     alertRepo = {
-      create: vi.fn((data) => data),
+      create: vi.fn((data) => ({ alertId: 'alert-1', ...data })),
       save: vi.fn(async (data) => ({ alertId: 'alert-1', ...data })),
       findOne: vi.fn(),
       createQueryBuilder: vi.fn(() => queryBuilder),
     };
-    service = new AlertsService(alertRepo);
+    mockDispatcher = {
+      dispatchAlert: vi.fn().mockResolvedValue(undefined),
+    };
+    service = new AlertsService(alertRepo, mockDispatcher);
+  });
+
+  describe('createAlert', () => {
+    it('tạo cảnh báo mới và tự động kích hoạt notification dispatch', async () => {
+      const alertData = {
+        pondId: 'pond-123',
+        metricName: 'dissolvedOxygen',
+        triggeredValue: 2.5,
+        alertLevel: AlertLevel.CRITICAL,
+        status: AlertStatus.ACTIVE,
+      };
+
+      const result = await service.createAlert(alertData);
+
+      expect(result.alertId).toBe('alert-1');
+      expect(alertRepo.save).toHaveBeenCalled();
+      expect(mockDispatcher.dispatchAlert).toHaveBeenCalledWith(result);
+    });
   });
 
   describe('createThresholdAlert', () => {
@@ -52,6 +76,7 @@ describe('AlertsService', () => {
         }),
       );
       expect(result.alertId).toBe('alert-1');
+      expect(mockDispatcher.dispatchAlert).toHaveBeenCalledWith(result);
     });
 
     it('describes high threshold violations in Vietnamese', async () => {

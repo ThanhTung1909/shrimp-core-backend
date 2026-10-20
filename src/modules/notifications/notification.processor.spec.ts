@@ -6,6 +6,7 @@ describe('NotificationQueueProcessor', () => {
   let processor: NotificationQueueProcessor;
   let mockEmailService: any;
   let mockEsmsService: any;
+  let mockFcmService: any;
 
   beforeEach(() => {
     mockEmailService = {
@@ -15,8 +16,15 @@ describe('NotificationQueueProcessor', () => {
     mockEsmsService = {
       sendSMS: vi.fn().mockResolvedValue({ CodeResult: '100', SMSID: 'sms-123' }),
     };
+    mockFcmService = {
+      sendToTokens: vi.fn().mockResolvedValue({
+        successCount: 1,
+        failureCount: 0,
+        invalidTokens: [],
+      }),
+    };
 
-    processor = new NotificationQueueProcessor(mockEmailService, mockEsmsService);
+    processor = new NotificationQueueProcessor(mockEmailService, mockEsmsService, mockFcmService);
   });
 
   describe('process: send-email', () => {
@@ -112,12 +120,13 @@ describe('NotificationQueueProcessor', () => {
 
       const result = await processor.process(mockJob);
 
-      expect(result).toEqual(
-        expect.objectContaining({
-          success: true,
-          fcmToken: 'fcm-device-token-abc-xyz',
-        }),
+      expect(mockFcmService.sendToTokens).toHaveBeenCalledWith(
+        ['fcm-device-token-abc-xyz'],
+        'Cảnh báo Oxy',
+        'Nồng độ Oxy thấp!',
+        undefined,
       );
+      expect(result).toEqual(expect.objectContaining({ successCount: 1 }));
     });
 
     it('nên bỏ qua và trả về null khi không có fcmToken', async () => {

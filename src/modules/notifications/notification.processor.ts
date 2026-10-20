@@ -10,6 +10,7 @@ import {
 } from '../../common/queues/queue.constants.js';
 import { EmailService } from '../email/email.service.js';
 import { EsmsService } from '../../common/esms/esms.service.js';
+import { FcmService } from './fcm.service.js';
 
 @Processor(QUEUE_NOTIFICATIONS)
 export class NotificationQueueProcessor extends WorkerHost {
@@ -18,6 +19,7 @@ export class NotificationQueueProcessor extends WorkerHost {
   constructor(
     private readonly emailService: EmailService,
     private readonly esmsService: EsmsService,
+    private readonly fcmService: FcmService,
   ) {
     super();
   }
@@ -66,12 +68,12 @@ export class NotificationQueueProcessor extends WorkerHost {
         data.phoneNumber,
         data.password,
       );
-      this.logger.log(`[Worker] Gửi email mật khẩu ban đầu thành công tới ${data.email}`);
+      this.logger.log('[Worker] SMTP accepted initial account email');
     } else {
       if (typeof this.emailService.sendNotificationEmail === 'function' && data.subject && data.text) {
         await this.emailService.sendNotificationEmail(data.email, data.subject, data.text);
       }
-      this.logger.log(`[Worker] Gửi email thông báo tới ${data.email}: ${data.subject}`);
+      this.logger.log('[Worker] SMTP accepted notification email');
     }
   }
 
@@ -80,7 +82,7 @@ export class NotificationQueueProcessor extends WorkerHost {
       throw new Error('Thiếu số điện thoại hoặc mã OTP để gửi SMS');
     }
     const result = await this.esmsService.sendSMS(data.phone, data.otp);
-    this.logger.log(`[Worker] Gửi SMS OTP thành công tới ${data.phone}`);
+    this.logger.log('[Worker] eSMS accepted OTP delivery request');
     return result;
   }
 
@@ -89,15 +91,14 @@ export class NotificationQueueProcessor extends WorkerHost {
       this.logger.warn(`[Worker] Bỏ qua gửi FCM: Token thiết bị không tồn tại`);
       return null;
     }
-    // Ghi log xử lý push notification và chuẩn bị sẵn sàng cho Firebase Admin SDK
-    this.logger.log(
-      `[Worker] Đang gửi FCM tới token ${data.fcmToken.slice(0, 10)}...: ${data.title} - ${data.body}`,
+    const result = await this.fcmService.sendToTokens(
+      [data.fcmToken],
+      data.title,
+      data.body,
+      data.data,
     );
-    return {
-      success: true,
-      deliveredAt: new Date().toISOString(),
-      fcmToken: data.fcmToken,
-    };
+    this.logger.log(`[Worker] Firebase accepted ${result.successCount} FCM request(s)`);
+    return result;
   }
 
   @OnWorkerEvent('completed')

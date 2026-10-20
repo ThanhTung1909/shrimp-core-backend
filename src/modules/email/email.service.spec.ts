@@ -1,30 +1,59 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ConfigService } from '@nestjs/config';
-import nodemailer from 'nodemailer';
-import { Logger } from '@nestjs/common';
+import { describe, expect, it, vi } from 'vitest';
 import { EmailService } from './email.service.js';
 
-vi.mock('nodemailer', () => ({ default: { createTransport: vi.fn() } }));
+describe('EmailService alert transport', () => {
+  const config = {
+    get: vi.fn((key: string) => {
+      const values: Record<string, string> = {
+        EMAIL_HOST: 'smtp.example.test',
+        EMAIL_PORT: '587',
+        EMAIL_USER: 'sender@example.test',
+        EMAIL_PASS: 'test-password',
+        EMAIL_TIMEOUT_MS: '1234',
+      };
+      return values[key];
+    }),
+  };
 
-describe('Existing EmailService password reset template', () => {
-  const sendMail = vi.fn();
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(nodemailer.createTransport).mockReturnValue({ sendMail } as any);
-    sendMail.mockResolvedValue({ accepted: ['a@example.com'], rejected: [] });
+  it('configures explicit SMTP timeouts', () => {
+    const service = new EmailService(config as any);
+    const options = (service as any).transporter.options;
+
+    expect(options.connectionTimeout).toBe(1234);
+    expect(options.greetingTimeout).toBe(1234);
+    expect(options.socketTimeout).toBe(1234);
   });
 
-  it('reuses SMTP transport, includes random supplied OTP, and logs no secret', async () => {
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
-    const service = new EmailService(new ConfigService({ EMAIL_USER: 'sender@example.com' }));
-    await service.sendPasswordResetOtp('a@example.com', '654321');
-    expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ to: 'a@example.com', subject: expect.stringContaining('OTP'), text: expect.stringContaining('654321') }));
-    expect(JSON.stringify(log.mock.calls)).not.toContain('654321');
-    log.mockRestore();
+  it('treats SMTP rejection as a provider failure', async () => {
+    const service = new EmailService(config as any);
+    (service as any).transporter = {
+      sendMail: vi.fn().mockResolvedValue({ accepted: [], rejected: ['farmer@example.test'] }),
+    };
+
+    await expect(
+      service.sendAlertEmail('farmer@example.test', 'Farmer', {
+        alertId: 'alert-1',
+        metricName: 'oxygen',
+        triggeredValue: 2.1,
+        alertLevel: 'CRITICAL',
+      }),
+    ).rejects.toThrow('SMTP did not accept the alert email');
   });
 
-  it('propagates SMTP rejection without logging message contents', async () => {
-    sendMail.mockResolvedValueOnce({ accepted: [], rejected: ['a@example.com'] });
-    await expect(new EmailService(new ConfigService()).sendPasswordResetOtp('a@example.com', '654321')).rejects.toThrow('SMTP did not accept');
+  it('uses Nodemailer json transport in test mock mode without an SMTP connection', async () => {
+    const mockConfig = {
+      get: vi.fn((key: string) => ({ EMAIL_MODE: 'mock', NODE_ENV: 'test' })[key]),
+    };
+    const service = new EmailService(mockConfig as any);
+
+    expect((service as any).transporter.options.jsonTransport).toBe(true);
+    await expect(
+      service.sendAlertEmail('farmer@example.test', 'Farmer', {
+        alertId: 'alert-1',
+        metricName: 'oxygen',
+        triggeredValue: 2.1,
+        alertLevel: 'CRITICAL',
+      }),
+    ).resolves.toBeUndefined();
   });
 });

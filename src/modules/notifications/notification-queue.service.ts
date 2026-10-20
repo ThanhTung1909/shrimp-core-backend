@@ -32,7 +32,7 @@ export class NotificationQueueService {
    * Đẩy job gửi Email vào hàng đợi BullMQ
    */
   async addSendEmailJob(data: SendEmailJobData, customOpts?: JobsOptions) {
-    this.logger.log(`[Queue] Đẩy job gửi email tới ${data.email} vào queue ${QUEUE_NOTIFICATIONS}`);
+    this.logger.log(`[Queue] Đẩy job gửi email vào queue ${QUEUE_NOTIFICATIONS}`);
     return this.notificationQueue.add(
       NOTIFICATION_JOBS.SEND_EMAIL,
       data,
@@ -47,7 +47,7 @@ export class NotificationQueueService {
    * Đẩy job gửi SMS OTP vào hàng đợi BullMQ
    */
   async addSendSmsJob(phone: string, otp: string, customOpts?: JobsOptions) {
-    this.logger.log(`[Queue] Đẩy job gửi SMS tới ${phone} vào queue ${QUEUE_NOTIFICATIONS}`);
+    this.logger.log(`[Queue] Đẩy job gửi SMS vào queue ${QUEUE_NOTIFICATIONS}`);
     const data: SendSmsJobData = { phone, otp };
     return this.notificationQueue.add(
       NOTIFICATION_JOBS.SEND_SMS,
@@ -63,7 +63,7 @@ export class NotificationQueueService {
    * Đẩy job gửi Push Notification (FCM) vào hàng đợi BullMQ
    */
   async addSendFcmJob(data: SendFcmJobData, customOpts?: JobsOptions) {
-    this.logger.log(`[Queue] Đẩy job gửi FCM title "${data.title}" vào queue ${QUEUE_NOTIFICATIONS}`);
+    this.logger.log(`[Queue] Đẩy job gửi FCM vào queue ${QUEUE_NOTIFICATIONS}`);
     return this.notificationQueue.add(
       NOTIFICATION_JOBS.SEND_FCM,
       data,

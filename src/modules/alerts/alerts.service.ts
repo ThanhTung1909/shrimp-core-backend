@@ -1,7 +1,9 @@
 import {
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -9,6 +11,7 @@ import { Alert } from './entities/alert.entity.js';
 import { QueryAlertDto } from './dto/query-alert.dto.js';
 import { ResolveAlertDto } from './dto/resolve-alert.dto.js';
 import { AlertStatus } from '../../common/enums/alert-status.enum.js';
+import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service.js';
 import { AlertLevel } from '../../common/enums/alert-level.enum.js';
 import { Role } from '../../common/enums/role.enum.js';
 
@@ -25,10 +28,27 @@ export interface CreateThresholdAlertInput {
 
 @Injectable()
 export class AlertsService {
+  private readonly logger = new Logger(AlertsService.name);
+
   constructor(
     @InjectRepository(Alert)
     private readonly alertRepo: Repository<Alert>,
-  ) { }
+    @Optional()
+    private readonly notificationDispatcher?: NotificationDispatcherService,
+  ) {}
+
+  async createAlert(alertData: Partial<Alert>): Promise<Alert> {
+    const alert = this.alertRepo.create(alertData);
+    const saved = await this.alertRepo.save(alert);
+
+    if (this.notificationDispatcher) {
+      void this.notificationDispatcher.dispatchAlert(saved).catch(() => {
+        this.logger.error('[AlertsService] Notification dispatch failed.');
+      });
+    }
+
+    return saved;
+  }
 
   async createThresholdAlert(input: CreateThresholdAlertInput): Promise<Alert> {
     const boundary = input.direction === 'LOW' ? input.minValue : input.maxValue;
@@ -44,7 +64,15 @@ export class AlertsService {
       message: `Chỉ số ${input.metricName} đo được ${input.triggeredValue}, ${comparison} ngưỡng ${boundary} (khoảng cho phép ${input.minValue} - ${input.maxValue}).`,
     });
 
-    return this.alertRepo.save(alert);
+    const saved = await this.alertRepo.save(alert);
+
+    if (this.notificationDispatcher) {
+      void this.notificationDispatcher.dispatchAlert(saved).catch(() => {
+        this.logger.error('[AlertsService] Notification dispatch failed.');
+      });
+    }
+
+    return saved;
   }
 
   async findAll(
