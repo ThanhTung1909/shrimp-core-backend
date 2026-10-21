@@ -18,6 +18,7 @@ import {
 import { Pond } from './entities/pond.entity.js';
 import { ThresholdConfig } from './entities/threshold-config.entity.js';
 import { ManualTestLog } from './entities/manual-test-log.entity.js';
+import { Farm } from '../farms/entities/farm.entity.js';
 import { CreatePondDto } from './dto/create-pond.dto.js';
 import { UpdatePondDto } from './dto/update-pond.dto.js';
 import { FindPondsQueryDto } from './dto/find-ponds-query.dto.js';
@@ -44,6 +45,8 @@ export class PondsService {
     private readonly thresholdRepo: Repository<ThresholdConfig>,
     @InjectRepository(ManualTestLog)
     private readonly manualLogRepo: Repository<ManualTestLog>,
+    @InjectRepository(Farm)
+    private readonly farmRepo: Repository<Farm>,
     @Optional()
     private readonly redisService?: RedisService,
   ) {}
@@ -79,6 +82,12 @@ export class PondsService {
       currentUserRole === Role.MANAGER && createPondDto.userId
         ? createPondDto.userId
         : currentUserId;
+
+    if (createPondDto.farmId) {
+      const farm = await this.farmRepo.findOneBy({ farmId: createPondDto.farmId });
+      if (!farm) throw new NotFoundException('Không tìm thấy trại nuôi');
+      if (farm.ownerId !== targetUserId) throw new BadRequestException('Ao nuôi phải thuộc cùng chủ sở hữu với trại nuôi');
+    }
 
     const newPond = this.pondRepo.create({
       ...createPondDto,
@@ -209,6 +218,16 @@ export class PondsService {
     }
     if (updatePondDto.capacity !== undefined) {
       pond.capacity = updatePondDto.capacity;
+    }
+    if (updatePondDto.farmId !== undefined) {
+      if (updatePondDto.farmId === null) {
+        pond.farmId = null;
+      } else {
+        const farm = await this.farmRepo.findOneBy({ farmId: updatePondDto.farmId });
+        if (!farm) throw new NotFoundException('Không tìm thấy trại nuôi');
+        if (farm.ownerId !== pond.userId) throw new BadRequestException('Ao nuôi phải thuộc cùng chủ sở hữu với trại nuôi');
+        pond.farmId = farm.farmId;
+      }
     }
 
     return await this.pondRepo.save(pond);

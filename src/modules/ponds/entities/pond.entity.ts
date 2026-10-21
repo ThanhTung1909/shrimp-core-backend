@@ -16,6 +16,8 @@ import { ThresholdConfig } from './threshold-config.entity.js';
 import { Alert } from '../../alerts/entities/alert.entity.js';
 import { AiPrediction } from '../../predictions/entities/ai-prediction.entity.js';
 import { ManualTestLog } from './manual-test-log.entity.js';
+import { Farm } from '../../farms/entities/farm.entity.js';
+import { ShrimpBatch } from '../../crops/entities/shrimp-batch.entity.js';
 
 @Entity('pond')
 export class Pond {
@@ -24,6 +26,10 @@ export class Pond {
 
   @Column({ type: 'uuid', name: 'user_id' })
   userId: string;
+
+  // Nullable to preserve access to ponds created before farms were introduced.
+  @Column({ type: 'uuid', name: 'farm_id', nullable: true })
+  farmId: string | null;
 
   @Column({ name: 'pond_name', type: 'varchar', length: 100, unique: true })
   pondName: string;
@@ -65,6 +71,10 @@ export class Pond {
   @JoinColumn({ name: 'user_id' })
   user: Relation<User>;
 
+  @ManyToOne(() => Farm, (farm) => farm.ponds, { onDelete: 'RESTRICT', nullable: true })
+  @JoinColumn({ name: 'farm_id' })
+  farm: Relation<Farm> | null;
+
   @OneToMany(() => Device, (device) => device.pond)
   devices: Relation<Device>[];
 
@@ -79,6 +89,9 @@ export class Pond {
 
   @OneToMany(() => ManualTestLog, (log) => log.pond)
   manualLogs: Relation<ManualTestLog>[];
+
+  @OneToMany(() => ShrimpBatch, (batch) => batch.pond)
+  shrimpBatches: Relation<ShrimpBatch>[];
 }
 
 
