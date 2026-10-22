@@ -918,7 +918,7 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       const userId = 'farmer-thresh-1';
       pondsStore.push({ pondId, userId, pondName: 'Ao Nguong' });
 
-      const res = await pondsController.createThreshold(pondId, userId, Role.FARMER, {
+      const res = await pondsController.createThreshold(pondId, userId, Role.MANAGER, {
         metricName: 'Temperature',
         minValue: 20,
         maxValue: 32,
@@ -937,7 +937,7 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       pondsStore.push({ pondId, userId, pondName: 'Ao Nguong 2' });
 
       await expect(
-        pondsController.createThreshold(pondId, userId, Role.FARMER, {
+        pondsController.createThreshold(pondId, userId, Role.MANAGER, {
           metricName: 'Temperature',
           minValue: 35,
           maxValue: 25,
@@ -970,7 +970,7 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       pondsStore.push(pond);
       thresholdsStore.push({ configId, pondId, pond, metricName: 'Salinity' });
 
-      const res = await pondsController.deleteThreshold(configId, userId, Role.FARMER);
+      const res = await pondsController.deleteThreshold(configId, userId, Role.MANAGER);
       expect(res.message).toBeDefined();
       expect(thresholdsStore.some((t) => t.configId === configId)).toBe(false);
     });
@@ -1166,7 +1166,7 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       const pondId = pondRes.data.pondId;
 
       // 5. Set Threshold
-      const threshRes = await pondsController.createThreshold(pondId, farmerId, Role.FARMER, {
+      const threshRes = await pondsController.createThreshold(pondId, farmerId, Role.MANAGER, {
         metricName: 'DO',
         minValue: 4.0,
         maxValue: 8.0,

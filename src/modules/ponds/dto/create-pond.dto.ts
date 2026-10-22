@@ -56,6 +56,11 @@ export class CreatePondDto {
 
   @ApiPropertyOptional({ description: 'ID người dùng chủ sở hữu ao (Dành cho Manager)', example: '123e4567-e89b-12d3-a456-426614174000' })
   @IsOptional()
-  @IsString({ message: 'userId phải là chuỗi ký tự!' })
+  @IsUUID('4', { message: 'userId phải là chuỗi UUID v4 hợp lệ!' })
   userId?: string;
+
+  @ApiPropertyOptional({ description: 'ID trại nuôi chứa ao' })
+  @IsOptional()
+  @IsUUID('4', { message: 'farmId phải là chuỗi UUID v4 hợp lệ!' })
+  farmId?: string;
 }
