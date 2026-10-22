@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
 import { Role } from '../../common/enums/role.enum.js';
 import { Pond } from '../ponds/entities/pond.entity.js';
+import { PondFarmerAssignment } from '../ponds/entities/pond-farmer-assignment.entity.js';
 import {
   CreateCropDto,
   CreateHarvestDto,
@@ -27,7 +28,24 @@ export class CropsService {
     @InjectRepository(HarvestLog)
     private readonly harvests: Repository<HarvestLog>,
     @InjectRepository(Pond) private readonly ponds: Repository<Pond>,
+    @InjectRepository(PondFarmerAssignment)
+    private readonly assignments?: Repository<PondFarmerAssignment>,
   ) {}
+  private async assertPondAccess(pond: Pond, userId: string, role: Role): Promise<void> {
+    if (role === Role.ADMIN) return;
+    if (role === Role.MANAGER) {
+      if (pond.userId !== userId && this.assignments) throw new ForbiddenException('Bạn không có quyền quản lý ao nuôi này!');
+      return;
+    }
+    if (!(this.assignments
+      ? await this.assignments.exist({ where: { pondId: pond.pondId, farmerId: userId } })
+      : pond.userId === userId))
+      throw new ForbiddenException('Bạn không được phân công cho ao nuôi này!');
+  }
+  private async assertPondManager(pond: Pond, userId: string, role: Role): Promise<void> {
+    if (this.assignments && role !== Role.ADMIN && (role !== Role.MANAGER || pond.userId !== userId))
+      throw new ForbiddenException('Chỉ MANAGER sở hữu ao mới có quyền quản lý vụ nuôi!');
+  }
   private async pondForUser(
     pondId: string,
     userId: string,
@@ -35,8 +53,7 @@ export class CropsService {
   ): Promise<Pond> {
     const pond = await this.ponds.findOneBy({ pondId });
     if (!pond) throw new NotFoundException('Không tìm thấy ao nuôi');
-    if (role === Role.FARMER && pond.userId !== userId)
-      throw new ForbiddenException('Bạn không có quyền quản lý ao nuôi này!');
+    await this.assertPondAccess(pond, userId, role);
     return pond;
   }
   private validateDates(stockingDate: string, expected?: string | null): void {
@@ -55,8 +72,7 @@ export class CropsService {
       relations: { pond: true },
     });
     if (!batch) throw new NotFoundException('Không tìm thấy vụ nuôi');
-    if (role === Role.FARMER && batch.pond.userId !== userId)
-      throw new ForbiddenException('Bạn không có quyền truy cập vụ nuôi này!');
+    await this.assertPondAccess(batch.pond, userId, role);
     return batch;
   }
   async create(
@@ -64,7 +80,8 @@ export class CropsService {
     userId: string,
     role: Role,
   ): Promise<ShrimpBatch> {
-    await this.pondForUser(dto.pondId, userId, role);
+    const pond = await this.pondForUser(dto.pondId, userId, role);
+    await this.assertPondManager(pond, userId, role);
     this.validateDates(dto.stockingDate, dto.expectedHarvestDate);
     if (
       await this.batches.exist({
@@ -95,7 +112,8 @@ export class CropsService {
       .createQueryBuilder('batch')
       .innerJoinAndSelect('batch.pond', 'pond')
       .where('1=1');
-    if (role === Role.FARMER) qb.andWhere('pond.user_id = :userId', { userId });
+    if (role === Role.MANAGER) qb.andWhere('pond.user_id = :userId', { userId });
+    if (role === Role.FARMER) qb.innerJoin('pond_farmer_assignments', 'assignment', 'assignment.pond_id = pond.pond_id AND assignment.farmer_id = :userId', { userId });
     if (pondId) qb.andWhere('batch.pond_id = :pondId', { pondId });
     if (farmId) qb.andWhere('pond.farm_id = :farmId', { farmId });
     if (status) qb.andWhere('batch.status = :status', { status });
@@ -123,6 +141,7 @@ export class CropsService {
     role: Role,
   ): Promise<ShrimpBatch> {
     const batch = await this.batchForUser(id, userId, role);
+    await this.assertPondManager(batch.pond, userId, role);
     if (batch.status !== ShrimpBatchStatus.ACTIVE)
       throw new ConflictException('Chỉ có thể cập nhật vụ nuôi đang hoạt động');
     if (dto.pondId && dto.pondId !== batch.pondId)
@@ -147,6 +166,7 @@ export class CropsService {
     role: Role,
   ): Promise<ShrimpBatch> {
     const batch = await this.batchForUser(id, userId, role);
+    await this.assertPondManager(batch.pond, userId, role);
     if (batch.status !== ShrimpBatchStatus.ACTIVE)
       throw new ConflictException(
         'Không thể chuyển trạng thái của vụ nuôi đã đóng',
@@ -162,6 +182,7 @@ export class CropsService {
     role: Role,
   ): Promise<{ message: string }> {
     const batch = await this.batchForUser(id, userId, role);
+    await this.assertPondManager(batch.pond, userId, role);
     if (await this.harvests.exist({ where: { batchId: id } }))
       throw new ConflictException(
         'Không thể xóa vụ nuôi đã có nhật ký thu hoạch',

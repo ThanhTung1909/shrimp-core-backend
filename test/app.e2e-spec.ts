@@ -55,4 +55,11 @@ describe('P1-3 Farms & Crops (e2e)', () => {
       })
       .expect(401);
   });
+
+  it('POST /ponds/:pondId/farmers - Reject unauthenticated assignment', async () => {
+    await request(app.getHttpServer())
+      .post('/ponds/e2fef228-c816-4f1c-98ac-fc69f76ece6f/farmers')
+      .send({ farmerId: 'ad39e658-94f2-4f7a-91dc-7569cc76d912' })
+      .expect(401);
+  });
 });

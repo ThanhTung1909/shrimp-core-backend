@@ -18,6 +18,7 @@ import { AiPrediction } from '../../predictions/entities/ai-prediction.entity.js
 import { ManualTestLog } from './manual-test-log.entity.js';
 import { Farm } from '../../farms/entities/farm.entity.js';
 import { ShrimpBatch } from '../../crops/entities/shrimp-batch.entity.js';
+import { PondFarmerAssignment } from './pond-farmer-assignment.entity.js';
 
 @Entity('pond')
 export class Pond {
@@ -92,6 +93,9 @@ export class Pond {
 
   @OneToMany(() => ShrimpBatch, (batch) => batch.pond)
   shrimpBatches: Relation<ShrimpBatch>[];
+
+  @OneToMany(() => PondFarmerAssignment, (assignment) => assignment.pond)
+  farmerAssignments: Relation<PondFarmerAssignment>[];
 }
 
 

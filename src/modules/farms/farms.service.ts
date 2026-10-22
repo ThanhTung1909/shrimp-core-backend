@@ -9,11 +9,11 @@ import { Farm } from './entities/farm.entity.js';
 @Injectable()
 export class FarmsService {
   constructor(@InjectRepository(Farm) private readonly farms: Repository<Farm>, @InjectRepository(Pond) private readonly ponds: Repository<Pond>) {}
-  private authorize(farm: Farm, userId: string, role: Role): void { if (role === Role.FARMER && farm.ownerId !== userId) throw new ForbiddenException('Bạn không có quyền truy cập trại nuôi này!'); }
+  private authorize(farm: Farm, userId: string, role: Role): void { if (role !== Role.ADMIN && farm.ownerId !== userId) throw new ForbiddenException('Bạn không có quyền truy cập trại nuôi này!'); }
   async create(dto: CreateFarmDto, userId: string): Promise<Farm> { return this.farms.save(this.farms.create({ ...dto, ownerId: userId, totalArea: dto.totalArea?.toString() })); }
   async findAll(query: FindFarmsQueryDto, userId: string, role: Role) {
     const { page = 1, limit = 10, search } = query;
-    const where = { ...(role === Role.FARMER ? { ownerId: userId } : {}), ...(search ? { farmName: ILike(`%${search}%`) } : {}) };
+    const where = { ...(role === Role.ADMIN ? {} : { ownerId: userId }), ...(search ? { farmName: ILike(`%${search}%`) } : {}) };
     const [data, total] = await this.farms.findAndCount({ where, relations: { owner: true }, order: { createdAt: 'DESC' }, skip: (page - 1) * limit, take: limit });
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }

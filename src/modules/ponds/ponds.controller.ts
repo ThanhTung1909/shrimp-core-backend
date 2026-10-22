@@ -24,6 +24,7 @@ import { UpdateThresholdConfigDto } from './dto/update-threshold-config.dto.js';
 import { CreateManualTestLogDto } from './dto/create-manual-test-log.dto.js';
 import { UpdateManualTestLogDto } from './dto/update-manual-test-log.dto.js';
 import { FindManualTestLogsQueryDto } from './dto/find-manual-test-logs-query.dto.js';
+import { AssignFarmerDto } from './dto/assign-farmer.dto.js';
 import { Pond } from './entities/pond.entity.js';
 import { ThresholdConfig } from './entities/threshold-config.entity.js';
 import { ManualTestLog } from './entities/manual-test-log.entity.js';
@@ -123,6 +124,28 @@ export class PondsController {
     @CurrentUser('role') role: Role,
   ): Promise<MessageOnlyResponse> {
     return this.pondsService.deletePond(pondId, userId, role);
+  }
+
+  @Roles(Role.MANAGER)
+  @Post(':pondId/farmers')
+  async assignFarmer(
+    @Param('pondId', ParseUUIDPipe) pondId: string,
+    @CurrentUser('userId') userId: string,
+    @CurrentUser('role') role: Role,
+    @Body() dto: AssignFarmerDto,
+  ) {
+    return this.pondsService.assignFarmer(pondId, dto.farmerId, userId, role);
+  }
+
+  @Roles(Role.MANAGER)
+  @Delete(':pondId/farmers/:farmerId')
+  async revokeFarmer(
+    @Param('pondId', ParseUUIDPipe) pondId: string,
+    @Param('farmerId', ParseUUIDPipe) farmerId: string,
+    @CurrentUser('userId') userId: string,
+    @CurrentUser('role') role: Role,
+  ): Promise<MessageOnlyResponse> {
+    return this.pondsService.revokeFarmer(pondId, farmerId, userId, role);
   }
 
   // ==========================================
