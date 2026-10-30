@@ -69,7 +69,12 @@ describe('NotificationsController', () => {
     const dto = { token: 'device-token-123', platform: 'android' };
     const res = await controller.registerFcmToken(userId, dto);
     expect(mockTokensService.registerToken).toHaveBeenCalledWith(userId, dto);
-    expect(res.token).toBe('device-token-123');
+    expect(res).toEqual({
+      tokenId: 'tok-1',
+      platform: 'android',
+      isActive: undefined,
+    });
+    expect(res).not.toHaveProperty('token');
   });
 
   it('DELETE /notifications/fcm-tokens - hủy đăng ký FCM token', async () => {

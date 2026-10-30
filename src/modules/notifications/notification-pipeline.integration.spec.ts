@@ -5,6 +5,7 @@ import { AlertStatus } from '../../common/enums/alert-status.enum.js';
 import { NotificationChannel } from './enums/notification-channel.enum.js';
 import { NotificationDispatcherService } from './notification-dispatcher.service.js';
 import { NotificationPreferencesService } from './notification-preferences.service.js';
+import { AlertNotificationListener } from './alert-notification.listener.js';
 
 describe('P1-2 alert notification pipeline', () => {
   const user = {
@@ -27,6 +28,8 @@ describe('P1-2 alert notification pipeline', () => {
   let esmsService: any;
   let emailService: any;
   let tokensService: any;
+  let listener: AlertNotificationListener;
+  let publishedEvents: string[];
 
   const preferenceKey = (severity: AlertLevel, channel: NotificationChannel) =>
     `${severity}:${channel}`;
@@ -88,7 +91,15 @@ describe('P1-2 alert notification pipeline', () => {
       create: vi.fn((value) => ({ alertId: 'alert-1', ...value })),
       save: vi.fn(async (value) => ({ alertId: 'alert-1', ...value })),
     };
-    alertsService = new AlertsService(alertRepo as any, dispatcher);
+    publishedEvents = [];
+    const redisPublisher = {
+      publish: vi.fn(async (_channel: string, message: string) => {
+        publishedEvents.push(message);
+        return 1;
+      }),
+    };
+    alertsService = new AlertsService(alertRepo as any, redisPublisher as any);
+    listener = new AlertNotificationListener({} as any, dispatcher);
   });
 
   async function createAlert(alertLevel = AlertLevel.CRITICAL) {
@@ -100,6 +111,7 @@ describe('P1-2 alert notification pipeline', () => {
       status: AlertStatus.ACTIVE,
       message: 'Dissolved oxygen is unsafe',
     });
+    await listener.handleAlertMessage(publishedEvents[0]);
     await vi.waitFor(() => expect(fcmService.sendToTokens).toHaveBeenCalled());
     return alert;
   }
@@ -115,6 +127,15 @@ describe('P1-2 alert notification pipeline', () => {
       expect.any(String),
       expect.objectContaining({ alertId: 'alert-1' }),
     );
+  });
+
+  it('does not send providers twice when Redis delivers the same alert event twice', async () => {
+    await createAlert();
+    await listener.handleAlertMessage(publishedEvents[0]);
+
+    expect(fcmService.sendToTokens).toHaveBeenCalledTimes(1);
+    expect(esmsService.sendAlertSMS).toHaveBeenCalledTimes(1);
+    expect(emailService.sendAlertEmail).toHaveBeenCalledTimes(1);
   });
 
   it.each([

@@ -311,6 +311,23 @@ describe('NotificationDispatcherService (Scenarios 7 - 15 & 23 - 35)', () => {
     );
   });
 
+  it('does not dispatch to a legacy or former-owner token when no active token exists', async () => {
+    // getActiveTokens deliberately ignores users.fcmToken, so an old fallback
+    // cannot become a delivery target after ownership is revoked or handed off.
+    mockTokensService.getActiveTokens.mockResolvedValueOnce([]);
+
+    await dispatcher.dispatchAlert(criticalAlert);
+
+    expect(mockFcmService.sendToTokens).not.toHaveBeenCalled();
+    expect(mockDeliveryRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: NotificationChannel.FCM,
+        status: DeliveryStatus.FAILED,
+        failureCode: 'NO_FCM_TOKEN',
+      }),
+    );
+  });
+
   it('Scenario 26: Pond ownership isolation - chỉ gửi cảnh báo đến đúng chủ sở hữu của ao nuôi phát sinh sự cố', async () => {
     const pondOwnerA = { ...mockUser, userId: 'owner-a-uuid' };
     mockPondRepo.findOne.mockResolvedValueOnce({

@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
 import { TelemetryData } from './entities/telemetry-data.entity.js';
@@ -12,7 +12,6 @@ import { AlertStatus } from '../../common/enums/alert-status.enum.js';
 import { ThresholdConfig } from '../ponds/entities/threshold-config.entity.js';
 import { AlertsService } from '../alerts/alerts.service.js';
 import { RedisService } from '../../common/redis/redis.service.js';
-import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service.js';
 
 const THRESHOLD_COOLDOWN_SECONDS = 15 * 60;
 const THRESHOLD_METRICS = [
@@ -41,8 +40,6 @@ export class TelemetryService implements OnModuleInit {
     private readonly dataSource: DataSource,
     private readonly alertsService: AlertsService,
     private readonly redisService: RedisService,
-    @Optional()
-    private readonly notificationDispatcher?: NotificationDispatcherService,
   ) {}
 
   async onModuleInit() {
@@ -356,7 +353,7 @@ export class TelemetryService implements OnModuleInit {
         }
       }
 
-      const alert = await this.alertsService.createThresholdAlert({
+      await this.alertsService.createThresholdAlert({
         pondId: config.pondId,
         deviceId: device.deviceId,
         metricName: config.metricName,
@@ -367,21 +364,6 @@ export class TelemetryService implements OnModuleInit {
         alertLevel,
       });
 
-      try {
-        await this.redisService.publish(
-          'alert:triggered',
-          JSON.stringify({
-            pondId: config.pondId,
-            userId: device.pond?.userId || null,
-            alert,
-          }),
-        );
-      } catch (error) {
-        this.logger.error(
-          '[Redis Publish Error] Lỗi publish alert:triggered cho threshold alert.',
-          error instanceof Error ? error.stack : String(error),
-        );
-      }
     } catch (error) {
       if (cooldownSet && !isEscalated) {
         try {
@@ -483,7 +465,7 @@ export class TelemetryService implements OnModuleInit {
       });
 
       if (!activeAlert) {
-        const newAlert = this.alertRepo.create({
+        await this.alertsService.createAlert({
           pondId: device.pondId,
           deviceId: device.deviceId,
           metricName: 'device_status',
@@ -492,27 +474,6 @@ export class TelemetryService implements OnModuleInit {
           status: AlertStatus.ACTIVE,
           message: `Thiết bị ${device.deviceName || device.deviceId} mất kết nối mạng đột ngột hoặc quá hạn phản hồi`,
         });
-        const savedAlert = await this.alertRepo.save(newAlert);
-
-        // Scenario 32: Asynchronous non-blocking dispatch to prevent blocking telemetry
-        if (this.notificationDispatcher) {
-          void this.notificationDispatcher.dispatchAlert(savedAlert).catch((err: any) => {
-            this.logger.error(`[TelemetryService] Dispatch alert error: ${err.message}`);
-          });
-        }
-
-        try {
-          await this.redisService.publish(
-            'alert:triggered',
-            JSON.stringify({
-              pondId: device.pondId,
-              userId: device.pond?.userId || null,
-              alert: savedAlert,
-            }),
-          );
-        } catch (err: any) {
-          this.logger.error(`[Redis Publish Error] Lỗi publish alert:triggered: ${err.message}`);
-        }
       }
     }
 

@@ -14,14 +14,12 @@ import { AlertsModule } from '../alerts/alerts.module.js';
 import { TelemetryGateway } from './telemetry.gateway.js';
 import { RedisModule } from '../../common/redis/redis.module.js';
 import { PondsModule } from '../ponds/ponds.module.js';
-import { NotificationsModule } from '../notifications/notifications.module.js';
 import { UsersModule } from '../users/users.module.js';
 
 @Module({
   imports: [
     ConfigModule,
     RedisModule,
-    NotificationsModule,
     forwardRef(() => PondsModule),
     UsersModule,
     TypeOrmModule.forFeature([TelemetryData, Device, Alert, ThresholdConfig]),

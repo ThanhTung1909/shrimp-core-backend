@@ -62,7 +62,13 @@ export class NotificationsController {
     @CurrentUser('userId') userId: string,
     @Body() dto: RegisterFcmTokenDto,
   ) {
-    return this.tokensService.registerToken(userId, dto);
+    const registered = await this.tokensService.registerToken(userId, dto);
+    // A device token is a credential; acknowledgement must not echo it back.
+    return {
+      tokenId: registered.tokenId,
+      platform: registered.platform,
+      isActive: registered.isActive,
+    };
   }
 
   @Delete('fcm-tokens')

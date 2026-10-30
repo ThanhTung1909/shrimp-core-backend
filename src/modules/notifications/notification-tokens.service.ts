@@ -17,8 +17,11 @@ export class NotificationTokensService {
   ) {}
 
   /**
-   * Đăng ký hoặc kích hoạt lại FCM token cho người dùng
-   * Đồng bộ token mới nhất vào fallback fcm_token trên bảng users
+   * Registers a device token for its owner.
+   *
+   * An active token cannot be claimed by another account. A device handoff is
+   * permitted only after its prior owner explicitly unregisters it, which
+   * marks the token inactive before the next account claims it.
    */
   async registerToken(
     userId: string,
@@ -29,6 +32,20 @@ export class NotificationTokensService {
     });
 
     if (existing) {
+      if (existing.userId !== userId && existing.isActive) {
+        throw new ForbiddenException(
+          'FCM token đang được liên kết với một tài khoản khác. Hãy đăng xuất thiết bị khỏi tài khoản cũ trước.',
+        );
+      }
+
+      if (existing.userId !== userId) {
+        // A previously inactive token is a valid explicit device handoff.
+        // Clear every legacy fallback reference before assigning the new owner.
+        await this.userRepo.update(
+          { userId: existing.userId, fcmToken: dto.token },
+          { fcmToken: null },
+        );
+      }
       existing.userId = userId;
       existing.platform = dto.platform || existing.platform || 'android';
       if (dto.deviceIdentifier) {
@@ -37,7 +54,7 @@ export class NotificationTokensService {
       existing.isActive = true;
       existing.lastUsedAt = new Date();
       const saved = await this.tokenRepo.save(existing);
-      await this.userRepo.update(userId, { fcmToken: dto.token });
+      await this.userRepo.update({ fcmToken: dto.token }, { fcmToken: null });
       return saved;
     }
 
@@ -50,8 +67,30 @@ export class NotificationTokensService {
       lastUsedAt: new Date(),
     });
 
-    const saved = await this.tokenRepo.save(created);
-    await this.userRepo.update(userId, { fcmToken: dto.token });
+    let saved: NotificationToken;
+    try {
+      saved = await this.tokenRepo.save(created);
+    } catch (error: any) {
+      // The global unique constraint is the final guard for concurrent
+      // registrations that both observed no existing row. Translate the
+      // losing cross-user request into the same ownership response.
+      if (error?.code !== '23505') {
+        throw error;
+      }
+
+      const winner = await this.tokenRepo.findOne({
+        where: { token: dto.token },
+      });
+      if (winner && winner.userId !== userId && winner.isActive) {
+        throw new ForbiddenException(
+          'FCM token đang được liên kết với một tài khoản khác. Hãy đăng xuất thiết bị khỏi tài khoản cũ trước.',
+        );
+      }
+      throw error;
+    }
+    // notification_token is authoritative. Remove any legacy fallback that
+    // could otherwise keep a token attached to a former account.
+    await this.userRepo.update({ fcmToken: dto.token }, { fcmToken: null });
     return saved;
   }
 
@@ -106,7 +145,8 @@ export class NotificationTokensService {
   }
 
   /**
-   * Lấy danh sách active tokens của user (có fallback sang User.fcmToken)
+   * Lấy danh sách active tokens của user. The legacy User.fcmToken field is
+   * deliberately not used: it lacks per-device ownership and may be stale.
    */
   async getActiveTokens(userId: string): Promise<string[]> {
     const tokens = await this.tokenRepo.find({
@@ -114,16 +154,6 @@ export class NotificationTokensService {
     });
 
     const activeList = tokens.map((t) => t.token);
-
-    if (activeList.length === 0) {
-      const user = await this.userRepo.findOne({
-        where: { userId },
-        select: ['userId', 'fcmToken'],
-      });
-      if (user?.fcmToken) {
-        return [user.fcmToken];
-      }
-    }
 
     return Array.from(new Set(activeList));
   }

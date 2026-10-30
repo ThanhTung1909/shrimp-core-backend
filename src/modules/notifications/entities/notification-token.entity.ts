@@ -13,6 +13,7 @@ import { User } from '../../users/entities/user.entity.js';
 
 @Entity('notification_token')
 @Unique(['userId', 'token'])
+@Unique('uq_notification_token_token', ['token'])
 export class NotificationToken {
   @PrimaryGeneratedColumn('uuid', { name: 'token_id' })
   tokenId: string;

@@ -11,7 +11,6 @@ import { User } from '../users/entities/user.entity.js';
 import { Alert } from '../alerts/entities/alert.entity.js';
 import { EmailModule } from '../email/email.module.js';
 import { EsmsModule } from '../../common/esms/esms.module.js';
-import { UsersModule } from '../users/users.module.js';
 import { RedisModule } from '../../common/redis/redis.module.js';
 import { FcmService } from './fcm.service.js';
 import { NotificationTokensService } from './notification-tokens.service.js';
@@ -27,7 +26,6 @@ import { AlertNotificationListener } from './alert-notification.listener.js';
     ConfigModule,
     EmailModule,
     EsmsModule,
-    UsersModule,
     RedisModule,
     BullModule.registerQueue({
       name: QUEUE_NOTIFICATIONS,

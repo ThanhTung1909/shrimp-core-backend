@@ -9,6 +9,7 @@ describe('AlertsService', () => {
   let service: AlertsService;
   let alertRepo: any;
   let queryBuilder: any;
+  let mockRedisService: any;
   let mockDispatcher: any;
 
   beforeEach(() => {
@@ -28,14 +29,21 @@ describe('AlertsService', () => {
       findOne: vi.fn(),
       createQueryBuilder: vi.fn(() => queryBuilder),
     };
-    mockDispatcher = {
-      dispatchAlert: vi.fn().mockResolvedValue(undefined),
-    };
-    service = new AlertsService(alertRepo, mockDispatcher);
+    mockRedisService = { publish: vi.fn().mockResolvedValue(1) };
+    mockDispatcher = { dispatchAlert: vi.fn().mockResolvedValue(undefined) };
+    service = new AlertsService(alertRepo, mockRedisService, mockDispatcher);
+  });
+
+  it('uses the dispatcher fallback only when publishing the stored alert fails', async () => {
+    mockRedisService.publish.mockRejectedValueOnce(new Error('Redis unavailable'));
+
+    const result = await service.createAlert({ pondId: 'pond-1' });
+
+    expect(mockDispatcher.dispatchAlert).toHaveBeenCalledWith(result);
   });
 
   describe('createAlert', () => {
-    it('tạo cảnh báo mới và tự động kích hoạt notification dispatch', async () => {
+    it('persists an alert before publishing its canonical notification event', async () => {
       const alertData = {
         pondId: 'pond-123',
         metricName: 'dissolvedOxygen',
@@ -48,7 +56,10 @@ describe('AlertsService', () => {
 
       expect(result.alertId).toBe('alert-1');
       expect(alertRepo.save).toHaveBeenCalled();
-      expect(mockDispatcher.dispatchAlert).toHaveBeenCalledWith(result);
+      expect(mockRedisService.publish).toHaveBeenCalledWith(
+        'alert:triggered',
+        JSON.stringify({ pondId: 'pond-123', alert: result }),
+      );
     });
   });
 
@@ -76,7 +87,10 @@ describe('AlertsService', () => {
         }),
       );
       expect(result.alertId).toBe('alert-1');
-      expect(mockDispatcher.dispatchAlert).toHaveBeenCalledWith(result);
+      expect(mockRedisService.publish).toHaveBeenCalledWith(
+        'alert:triggered',
+        JSON.stringify({ pondId: 'pond-1', alert: result }),
+      );
     });
 
     it('describes high threshold violations in Vietnamese', async () => {
