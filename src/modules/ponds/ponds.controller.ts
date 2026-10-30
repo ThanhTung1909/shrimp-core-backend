@@ -126,7 +126,7 @@ export class PondsController {
     return this.pondsService.deletePond(pondId, userId, role);
   }
 
-  @Roles(Role.MANAGER)
+  @Roles(Role.ADMIN, Role.MANAGER)
   @Post(':pondId/farmers')
   async assignFarmer(
     @Param('pondId', ParseUUIDPipe) pondId: string,
@@ -137,7 +137,7 @@ export class PondsController {
     return this.pondsService.assignFarmer(pondId, dto.farmerId, userId, role);
   }
 
-  @Roles(Role.MANAGER)
+  @Roles(Role.ADMIN, Role.MANAGER)
   @Delete(':pondId/farmers/:farmerId')
   async revokeFarmer(
     @Param('pondId', ParseUUIDPipe) pondId: string,

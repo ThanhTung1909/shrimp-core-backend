@@ -11,6 +11,6 @@ export default defineConfig({
     include: ['**/*.spec.ts'],
     // Snapshots are preserved evidence, not executable tests. Keep Vitest's
     // defaults and exclude only this repository-local backup tree.
-    exclude: [...configDefaults.exclude, '**/backups/**'],
+    exclude: [...configDefaults.exclude, '**/backups/**', '**/*.e2e-spec.ts'],
   },
 });

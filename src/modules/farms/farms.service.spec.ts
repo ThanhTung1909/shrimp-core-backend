@@ -26,4 +26,13 @@ describe('FarmsService', () => {
     ponds.exist.mockResolvedValue(true);
     await expect(service.remove('farm', 'owner', Role.FARMER)).rejects.toThrow(ConflictException);
   });
+  it('allows ADMIN to manage a farm owned by another manager', async () => {
+    const { service, farms } = setup();
+    farms.findOne.mockResolvedValue({ farmId: 'farm', ownerId: 'manager-owner', farmName: 'Foreign farm' });
+    await expect(service.findOne('farm', 'admin', Role.ADMIN)).resolves.toMatchObject({ farmId: 'farm' });
+    await expect(service.update('farm', { farmName: 'Updated by admin' }, 'admin', Role.ADMIN))
+      .resolves.toMatchObject({ farmName: 'Updated by admin' });
+    await expect(service.remove('farm', 'admin', Role.ADMIN)).resolves.toEqual({ message: 'Xóa trại nuôi thành công!' });
+    expect(farms.remove).toHaveBeenCalled();
+  });
 });

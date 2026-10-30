@@ -44,4 +44,14 @@ describe('CropsService', () => {
     batches.findOne.mockResolvedValue({ batchId: 'batch', pond, status: ShrimpBatchStatus.HARVESTED });
     await expect(service.changeStatus('batch', ShrimpBatchStatus.ACTIVE, 'owner', Role.FARMER)).rejects.toThrow(ConflictException);
   });
+  it('allows ADMIN to manage a crop in another manager pond', async () => {
+    const foreignPond = { ...pond, userId: 'other-manager' };
+    const { service, batches } = serviceWith();
+    batches.findOne.mockResolvedValue({ batchId: 'batch', pond: foreignPond, pondId: foreignPond.pondId, status: ShrimpBatchStatus.ACTIVE });
+    await expect(service.create({ pondId: foreignPond.pondId, stockingDate: '2026-01-01', initialQuantity: 10, shrimpSpecies: 'Vannamei' }, 'admin', Role.ADMIN))
+      .resolves.toBeDefined();
+    await expect(service.update('batch', { shrimpSpecies: 'Updated' }, 'admin', Role.ADMIN))
+      .resolves.toMatchObject({ shrimpSpecies: 'Updated' });
+    await expect(service.remove('batch', 'admin', Role.ADMIN)).resolves.toEqual({ message: 'Xóa vụ nuôi thành công!' });
+  });
 });
