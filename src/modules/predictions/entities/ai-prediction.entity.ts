@@ -51,7 +51,12 @@ export class AiPrediction {
   isFallback: boolean;
 
   // Nguồn gốc tính toán dự báo: 'AI_MICROSERVICE' hoặc 'HEURISTIC_RULE'
-  @Column({ name: 'prediction_source', type: 'varchar', length: 50, default: 'AI_MICROSERVICE' })
+  @Column({
+    name: 'prediction_source',
+    type: 'varchar',
+    length: 50,
+    default: 'AI_MICROSERVICE',
+  })
   predictionSource: string;
 
   // Quan hệ ManyToOne với Pond: 1 Ao nuôi có thể có nhiều bản ghi dự báo lịch sử và tương lai

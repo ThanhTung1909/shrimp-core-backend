@@ -18,6 +18,9 @@ import {
 import { Pond } from './entities/pond.entity.js';
 import { ThresholdConfig } from './entities/threshold-config.entity.js';
 import { ManualTestLog } from './entities/manual-test-log.entity.js';
+import { Farm } from '../farms/entities/farm.entity.js';
+import { User } from '../users/entities/user.entity.js';
+import { PondFarmerAssignment } from './entities/pond-farmer-assignment.entity.js';
 import { CreatePondDto } from './dto/create-pond.dto.js';
 import { UpdatePondDto } from './dto/update-pond.dto.js';
 import { FindPondsQueryDto } from './dto/find-ponds-query.dto.js';
@@ -44,6 +47,12 @@ export class PondsService {
     private readonly thresholdRepo: Repository<ThresholdConfig>,
     @InjectRepository(ManualTestLog)
     private readonly manualLogRepo: Repository<ManualTestLog>,
+    @InjectRepository(Farm)
+    private readonly farmRepo: Repository<Farm>,
+    @InjectRepository(User)
+    private readonly userRepo?: Repository<User>,
+    @InjectRepository(PondFarmerAssignment)
+    private readonly assignmentRepo?: Repository<PondFarmerAssignment>,
     @Optional()
     private readonly redisService?: RedisService,
   ) {}
@@ -56,6 +65,79 @@ export class PondsService {
         // Safe ignore cache deletion error
       }
     }
+  }
+
+  private async assertPondAccess(
+    pond: Pond,
+    currentUserId: string,
+    currentUserRole: Role,
+  ): Promise<void> {
+    if (currentUserRole === Role.ADMIN) return;
+    if (currentUserRole === Role.MANAGER) {
+      if (pond.userId !== currentUserId && this.assignmentRepo)
+        throw new ForbiddenException('Bạn không có quyền truy cập ao nuôi này!');
+      return;
+    }
+    if (
+      currentUserRole !== Role.FARMER ||
+      !(this.assignmentRepo
+        ? await this.assignmentRepo.exist({
+        where: { pondId: pond.pondId, farmerId: currentUserId },
+        })
+        : pond.userId === currentUserId)
+    ) {
+      throw new ForbiddenException('Bạn không được phân công cho ao nuôi này!');
+    }
+  }
+
+  private async assertPondManager(
+    pond: Pond,
+    currentUserId: string,
+    currentUserRole: Role,
+  ): Promise<void> {
+    if (this.assignmentRepo && currentUserRole !== Role.ADMIN &&
+      (currentUserRole !== Role.MANAGER || pond.userId !== currentUserId)) {
+      throw new ForbiddenException('Chỉ chủ ao mới có quyền quản lý ao nuôi này!');
+    }
+  }
+
+  /**
+   * FARMERs can record measurements for ponds to which they are assigned, but
+   * editing or deleting the operational history remains a manager action.
+   */
+  private async assertManualLogManager(
+    pond: Pond,
+    currentUserId: string,
+    currentUserRole: Role,
+  ): Promise<void> {
+    await this.assertPondAccess(pond, currentUserId, currentUserRole);
+    await this.assertPondManager(pond, currentUserId, currentUserRole);
+  }
+
+  private withoutSensitiveUserFields<T extends Record<string, unknown>>(
+    user: T | null | undefined,
+  ): T | null | undefined {
+    if (!user) return user;
+    const { passwordHash: _passwordHash, fcmToken: _fcmToken, email: _email,
+      phoneNumber: _phoneNumber, tokenVersion: _tokenVersion,
+      isLocked: _isLocked, mustChangePassword: _mustChangePassword, ...safeUser } = user;
+    return safeUser as T;
+  }
+
+  private sanitizePond(pond: Pond): Pond {
+    if (!pond.user) return pond;
+    return {
+      ...pond,
+      user: this.withoutSensitiveUserFields(pond.user as unknown as Record<string, unknown>),
+    } as unknown as Pond;
+  }
+
+  private sanitizeManualLog(log: ManualTestLog): ManualTestLog {
+    if (!log.testedBy) return log;
+    return {
+      ...log,
+      testedBy: this.withoutSensitiveUserFields(log.testedBy as unknown as Record<string, unknown>),
+    } as unknown as ManualTestLog;
   }
 
   // ==========================================
@@ -75,10 +157,18 @@ export class PondsService {
       throw new ConflictException('Tên ao nuôi đã tồn tại!');
     }
 
-    const targetUserId =
-      currentUserRole === Role.MANAGER && createPondDto.userId
-        ? createPondDto.userId
-        : currentUserId;
+    if (this.assignmentRepo && currentUserRole !== Role.ADMIN && currentUserRole !== Role.MANAGER)
+      throw new ForbiddenException('Chỉ MANAGER mới có quyền tạo ao nuôi!');
+    const targetUserId = (currentUserRole === Role.ADMIN ||
+      (!this.assignmentRepo && currentUserRole === Role.MANAGER)) && createPondDto.userId
+      ? createPondDto.userId
+      : currentUserId;
+
+    if (createPondDto.farmId) {
+      const farm = await this.farmRepo.findOneBy({ farmId: createPondDto.farmId });
+      if (!farm) throw new NotFoundException('Không tìm thấy trại nuôi');
+      if (farm.ownerId !== targetUserId) throw new BadRequestException('Ao nuôi phải thuộc cùng chủ sở hữu với trại nuôi');
+    }
 
     const newPond = this.pondRepo.create({
       ...createPondDto,
@@ -96,8 +186,23 @@ export class PondsService {
     const { page = 1, limit = 10, search, status, userId } = query;
     const skip = (page - 1) * limit;
 
-    const effectiveUserId =
-      currentUserRole === Role.FARMER ? currentUserId : userId;
+    if (currentUserRole === Role.FARMER && this.assignmentRepo) {
+      const qb = this.pondRepo
+        .createQueryBuilder('pond')
+        .innerJoin('pond_farmer_assignments', 'assignment',
+          'assignment.pond_id = pond.pond_id AND assignment.farmer_id = :userId',
+          { userId: currentUserId })
+        .leftJoinAndSelect('pond.user', 'user')
+        .leftJoinAndSelect('pond.devices', 'devices')
+        .leftJoinAndSelect('pond.thresholdConfigs', 'thresholdConfigs');
+      if (search) qb.andWhere('pond.pond_name ILIKE :search', { search: `%${search}%` });
+      if (status) qb.andWhere('pond.status = :status', { status });
+      const [data, total] = await qb.orderBy('pond.created_at', 'DESC').skip(skip).take(limit).getManyAndCount();
+      return { data: data.map((pond) => this.sanitizePond(pond)), total, page, limit, totalPages: Math.ceil(total / limit) };
+    }
+
+    const effectiveUserId = currentUserRole === Role.MANAGER && this.assignmentRepo ? currentUserId
+      : currentUserRole === Role.FARMER ? currentUserId : userId;
 
     let where: FindOptionsWhere<Pond>[] | FindOptionsWhere<Pond> = {};
 
@@ -129,7 +234,7 @@ export class PondsService {
     });
 
     return {
-      data,
+      data: data.map((pond) => this.sanitizePond(pond)),
       total,
       page,
       limit,
@@ -156,11 +261,9 @@ export class PondsService {
       throw new NotFoundException(`Không tìm thấy ao nuôi với ID: ${pondId}`);
     }
 
-    if (currentUserRole === Role.FARMER && pond.userId !== currentUserId) {
-      throw new ForbiddenException('Bạn không có quyền truy cập ao nuôi này!');
-    }
+    await this.assertPondAccess(pond, currentUserId, currentUserRole);
 
-    return pond;
+    return this.sanitizePond(pond);
   }
 
   async updatePond(
@@ -175,7 +278,11 @@ export class PondsService {
       currentUserRole,
     );
 
-    if (updatePondDto.userId && currentUserRole === Role.MANAGER) {
+    await this.assertPondManager(pond, currentUserId, currentUserRole);
+
+    if (updatePondDto.userId &&
+      (currentUserRole === Role.ADMIN ||
+        (!this.assignmentRepo && currentUserRole === Role.MANAGER))) {
       pond.userId = updatePondDto.userId;
     }
     if (
@@ -210,8 +317,18 @@ export class PondsService {
     if (updatePondDto.capacity !== undefined) {
       pond.capacity = updatePondDto.capacity;
     }
+    if (updatePondDto.farmId !== undefined) {
+      if (updatePondDto.farmId === null) {
+        pond.farmId = null;
+      } else {
+        const farm = await this.farmRepo.findOneBy({ farmId: updatePondDto.farmId });
+        if (!farm) throw new NotFoundException('Không tìm thấy trại nuôi');
+        if (farm.ownerId !== pond.userId) throw new BadRequestException('Ao nuôi phải thuộc cùng chủ sở hữu với trại nuôi');
+        pond.farmId = farm.farmId;
+      }
+    }
 
-    return await this.pondRepo.save(pond);
+    return this.sanitizePond(await this.pondRepo.save(pond));
   }
 
   async deletePond(
@@ -224,6 +341,7 @@ export class PondsService {
       currentUserId,
       currentUserRole,
     );
+    await this.assertPondManager(pond, currentUserId, currentUserRole);
     await this.pondRepo.remove(pond);
     return { message: 'Xóa ao nuôi thành công!' };
   }
@@ -238,7 +356,8 @@ export class PondsService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<ThresholdConfig> {
-    await this.findPondById(pondId, currentUserId, currentUserRole);
+    const pond = await this.findPondById(pondId, currentUserId, currentUserRole);
+    await this.assertPondManager(pond, currentUserId, currentUserRole);
 
     const existingConfig = await this.thresholdRepo.findOne({
       where: { pondId, metricName: dto.metricName },
@@ -333,12 +452,9 @@ export class PondsService {
       );
     }
 
-    if (
-      currentUserRole === Role.FARMER &&
-      config.pond.userId !== currentUserId
-    ) {
-      throw new ForbiddenException('Bạn không có quyền chỉnh sửa cấu hình này!');
-    }
+    if (currentUserRole === Role.FARMER)
+      throw new ForbiddenException('FARMER không có quyền chỉnh sửa cấu hình ngưỡng!');
+    await this.assertPondManager(config.pond, currentUserId, currentUserRole);
 
     const newMin = dto.minValue !== undefined ? dto.minValue : config.minValue;
     const newMax = dto.maxValue !== undefined ? dto.maxValue : config.maxValue;
@@ -377,12 +493,9 @@ export class PondsService {
       );
     }
 
-    if (
-      currentUserRole === Role.FARMER &&
-      config.pond.userId !== currentUserId
-    ) {
-      throw new ForbiddenException('Bạn không có quyền xóa cấu hình này!');
-    }
+    if (currentUserRole === Role.FARMER)
+      throw new ForbiddenException('FARMER không có quyền xóa cấu hình ngưỡng!');
+    await this.assertPondManager(config.pond, currentUserId, currentUserRole);
 
     const pondId = config.pondId;
     await this.thresholdRepo.remove(config);
@@ -409,7 +522,7 @@ export class PondsService {
       testedAt: dto.testedAt ? new Date(dto.testedAt) : new Date(),
     });
 
-    return await this.manualLogRepo.save(log);
+    return this.sanitizeManualLog(await this.manualLogRepo.save(log));
   }
 
   async findManualLogsByPond(
@@ -453,7 +566,7 @@ export class PondsService {
     });
 
     return {
-      data,
+      data: data.map((log) => this.sanitizeManualLog(log)),
       total,
       page,
       limit,
@@ -480,11 +593,8 @@ export class PondsService {
       );
     }
 
-    if (currentUserRole === Role.FARMER && log.pond.userId !== currentUserId) {
-      throw new ForbiddenException('Bạn không có quyền truy cập bản ghi này!');
-    }
-
-    return log;
+    await this.assertPondAccess(log.pond, currentUserId, currentUserRole);
+    return this.sanitizeManualLog(log);
   }
 
   async updateManualTestLog(
@@ -493,18 +603,19 @@ export class PondsService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<ManualTestLog> {
-    const log = await this.findManualLogById(
-      logId,
-      currentUserId,
-      currentUserRole,
-    );
+    const log = await this.manualLogRepo.findOne({
+      where: { logId },
+      relations: { pond: true, testedBy: true },
+    });
+    if (!log) throw new NotFoundException(`Không tìm thấy bản ghi đo thủ công với ID: ${logId}`);
+    await this.assertManualLogManager(log.pond, currentUserId, currentUserRole);
 
     if (dto.nh3Value !== undefined) log.nh3Value = dto.nh3Value;
     if (dto.no2Value !== undefined) log.no2Value = dto.no2Value;
     if (dto.note !== undefined) log.note = dto.note;
     if (dto.testedAt !== undefined) log.testedAt = new Date(dto.testedAt);
 
-    return await this.manualLogRepo.save(log);
+    return this.sanitizeManualLog(await this.manualLogRepo.save(log));
   }
 
   async deleteManualTestLog(
@@ -512,12 +623,52 @@ export class PondsService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<MessageOnlyResponse> {
-    const log = await this.findManualLogById(
-      logId,
-      currentUserId,
-      currentUserRole,
-    );
+    const log = await this.manualLogRepo.findOne({
+      where: { logId },
+      relations: { pond: true, testedBy: true },
+    });
+    if (!log) throw new NotFoundException(`Không tìm thấy bản ghi đo thủ công với ID: ${logId}`);
+    await this.assertManualLogManager(log.pond, currentUserId, currentUserRole);
     await this.manualLogRepo.remove(log);
     return { message: 'Xóa bản ghi đo thủ công thành công!' };
+  }
+
+  async assignFarmer(
+    pondId: string,
+    farmerId: string,
+    currentUserId: string,
+    currentUserRole: Role,
+  ): Promise<PondFarmerAssignment> {
+    if (currentUserRole !== Role.ADMIN && currentUserRole !== Role.MANAGER)
+      throw new ForbiddenException('Chỉ ADMIN hoặc MANAGER mới có quyền phân công FARMER');
+    const pond = await this.findPondById(pondId, currentUserId, currentUserRole);
+    await this.assertPondManager(pond, currentUserId, currentUserRole);
+    if (!this.userRepo || !this.assignmentRepo)
+      throw new ForbiddenException('Dịch vụ phân công FARMER chưa sẵn sàng');
+    const farmer = await this.userRepo.findOneBy({ userId: farmerId });
+    if (!farmer) throw new NotFoundException('Không tìm thấy FARMER');
+    if (farmer.role !== Role.FARMER)
+      throw new BadRequestException('Chỉ có thể phân công người dùng có vai trò FARMER');
+    if (await this.assignmentRepo.exist({ where: { pondId, farmerId } }))
+      throw new ConflictException('FARMER đã được phân công cho ao nuôi này');
+    return this.assignmentRepo.save(this.assignmentRepo.create({ pondId, farmerId }));
+  }
+
+  async revokeFarmer(
+    pondId: string,
+    farmerId: string,
+    currentUserId: string,
+    currentUserRole: Role,
+  ): Promise<MessageOnlyResponse> {
+    if (currentUserRole !== Role.ADMIN && currentUserRole !== Role.MANAGER)
+      throw new ForbiddenException('Chỉ ADMIN hoặc MANAGER mới có quyền thu hồi phân công FARMER');
+    const pond = await this.findPondById(pondId, currentUserId, currentUserRole);
+    await this.assertPondManager(pond, currentUserId, currentUserRole);
+    if (!this.assignmentRepo)
+      throw new ForbiddenException('Dịch vụ phân công FARMER chưa sẵn sàng');
+    const assignment = await this.assignmentRepo.findOneBy({ pondId, farmerId });
+    if (!assignment) throw new NotFoundException('Không tìm thấy phân công FARMER cho ao nuôi này');
+    await this.assignmentRepo.remove(assignment);
+    return { message: 'Thu hồi phân công FARMER thành công!' };
   }
 }

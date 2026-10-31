@@ -1,0 +1,2 @@
+import { Module } from '@nestjs/common'; import { TypeOrmModule } from '@nestjs/typeorm'; import { Pond } from '../ponds/entities/pond.entity.js'; import { FarmsController } from './farms.controller.js'; import { Farm } from './entities/farm.entity.js'; import { FarmsService } from './farms.service.js';
+@Module({ imports: [TypeOrmModule.forFeature([Farm, Pond])], controllers: [FarmsController], providers: [FarmsService], exports: [FarmsService, TypeOrmModule] }) export class FarmsModule {}

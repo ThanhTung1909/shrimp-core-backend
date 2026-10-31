@@ -14,6 +14,8 @@ import { Pond } from '../../ponds/entities/pond.entity.js';
 import { Alert } from '../../alerts/entities/alert.entity.js';
 import { ManualTestLog } from '../../ponds/entities/manual-test-log.entity.js';
 import { UserSession } from '../../auth/entities/user-session.entity.js';
+import { Farm } from '../../farms/entities/farm.entity.js';
+import { PondFarmerAssignment } from '../../ponds/entities/pond-farmer-assignment.entity.js';
 
 @Entity('users')
 export class User {
@@ -84,6 +86,12 @@ export class User {
 
   @OneToMany(() => Pond, (pond) => pond.user)
   ponds: Relation<Pond>[];
+
+  @OneToMany(() => Farm, (farm) => farm.owner)
+  farms: Relation<Farm>[];
+
+  @OneToMany(() => PondFarmerAssignment, (assignment) => assignment.farmer)
+  pondAssignments: Relation<PondFarmerAssignment>[];
 
   @OneToMany(() => Alert, (alert) => alert.resolvedBy)
   resolvedAlerts: Relation<Alert>[];

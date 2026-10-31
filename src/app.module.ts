@@ -15,6 +15,8 @@ import { RedisService } from './common/redis/redis.service.js';
 import { RedisThrottlerStorage } from './common/redis/redis-throttler.storage.js';
 import { QueueModule } from './common/queues/queue.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
+import { FarmsModule } from './modules/farms/farms.module.js';
+import { CropsModule } from './modules/crops/crops.module.js';
 
 import { ScheduleModule } from '@nestjs/schedule';
 import { EsmsModule } from './common/esms/esms.module.js';
@@ -71,7 +73,9 @@ import { HttpThrottlerGuard } from './common/guards/http-throttler.guard.js';
 
     // Các modules thực thể cốt lõi
     UsersModule,
+    FarmsModule,
     PondsModule,
+    CropsModule,
     DevicesModule,
     AlertsModule,
     PredictionsModule,

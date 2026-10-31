@@ -27,13 +27,15 @@ describe('PondsController authorization metadata', () => {
     controller.createPond,
     controller.updatePond,
     controller.deletePond,
+    controller.assignFarmer,
+    controller.revokeFarmer,
     controller.createThreshold,
     controller.updateThreshold,
     controller.deleteThreshold,
   ];
 
   it.each(pondManagementHandlers)(
-    'Pond và Threshold mutation yêu cầu chính xác ADMIN và MANAGER',
+    'Pond, assignment và Threshold mutation yêu cầu chính xác ADMIN và MANAGER',
     (handler) => {
       expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([
         Role.ADMIN,
