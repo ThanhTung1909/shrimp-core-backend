@@ -9,8 +9,12 @@ describe('AlertsService', () => {
   let service: AlertsService;
   let alertRepo: any;
   let queryBuilder: any;
+  let mockRedisService: any;
+  let mockDispatcher: any;
 
   beforeEach(() => {
+    vi.clearAllMocks();
+
     queryBuilder = {
       leftJoinAndSelect: vi.fn().mockReturnThis(),
       andWhere: vi.fn().mockReturnThis(),
@@ -20,12 +24,43 @@ describe('AlertsService', () => {
       getManyAndCount: vi.fn().mockResolvedValue([[{ alertId: 'alert-1' }], 1]),
     };
     alertRepo = {
-      create: vi.fn((data) => data),
+      create: vi.fn((data) => ({ alertId: 'alert-1', ...data })),
       save: vi.fn(async (data) => ({ alertId: 'alert-1', ...data })),
       findOne: vi.fn(),
       createQueryBuilder: vi.fn(() => queryBuilder),
     };
-    service = new AlertsService(alertRepo);
+    mockRedisService = { publish: vi.fn().mockResolvedValue(1) };
+    mockDispatcher = { dispatchAlert: vi.fn().mockResolvedValue(undefined) };
+    service = new AlertsService(alertRepo, mockRedisService, mockDispatcher);
+  });
+
+  it('uses the dispatcher fallback only when publishing the stored alert fails', async () => {
+    mockRedisService.publish.mockRejectedValueOnce(new Error('Redis unavailable'));
+
+    const result = await service.createAlert({ pondId: 'pond-1' });
+
+    expect(mockDispatcher.dispatchAlert).toHaveBeenCalledWith(result);
+  });
+
+  describe('createAlert', () => {
+    it('persists an alert before publishing its canonical notification event', async () => {
+      const alertData = {
+        pondId: 'pond-123',
+        metricName: 'dissolvedOxygen',
+        triggeredValue: 2.5,
+        alertLevel: AlertLevel.CRITICAL,
+        status: AlertStatus.ACTIVE,
+      };
+
+      const result = await service.createAlert(alertData);
+
+      expect(result.alertId).toBe('alert-1');
+      expect(alertRepo.save).toHaveBeenCalled();
+      expect(mockRedisService.publish).toHaveBeenCalledWith(
+        'alert:triggered',
+        JSON.stringify({ pondId: 'pond-123', alert: result }),
+      );
+    });
   });
 
   describe('createThresholdAlert', () => {
@@ -52,6 +87,10 @@ describe('AlertsService', () => {
         }),
       );
       expect(result.alertId).toBe('alert-1');
+      expect(mockRedisService.publish).toHaveBeenCalledWith(
+        'alert:triggered',
+        JSON.stringify({ pondId: 'pond-1', alert: result }),
+      );
     });
 
     it('describes high threshold violations in Vietnamese', async () => {

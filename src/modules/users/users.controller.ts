@@ -21,6 +21,7 @@ import { Role } from '../../common/enums/role.enum.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { UpdateFcmTokenDto } from './dto/update-fcm-token.dto.js';
+import { NotificationTokensService } from '../notifications/notification-tokens.service.js';
 import { AdminUpdateUserDto } from './dto/admin-update-user.dto.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
 import { FindUsersQueryDto } from './dto/find-users-query.dto.js';
@@ -33,7 +34,10 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly notificationTokensService?: NotificationTokensService,
+  ) {}
 
   // API 1: Người dùng tự cập nhật thông tin cá nhân (Profile)
   @Patch('profile')
@@ -64,10 +68,14 @@ export class UsersController {
     @CurrentUser('userId') userId: string,
     @Body() updateFcmTokenDto: UpdateFcmTokenDto,
   ): Promise<{ message: string }> {
-    return this.usersService.updateFcmToken(
+    if (!this.notificationTokensService) {
+      throw new Error('Notification token service is not configured');
+    }
+    await this.notificationTokensService.registerToken(
       userId,
-      updateFcmTokenDto.fcmToken,
+      { token: updateFcmTokenDto.fcmToken },
     );
+    return { message: 'Cập nhật FCM Token thành công!' };
   }
 
   // API 3: Quản trị viên lấy danh sách tất cả người dùng

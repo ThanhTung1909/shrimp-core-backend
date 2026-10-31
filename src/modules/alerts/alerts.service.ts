@@ -1,7 +1,9 @@
 import {
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -11,6 +13,8 @@ import { ResolveAlertDto } from './dto/resolve-alert.dto.js';
 import { AlertStatus } from '../../common/enums/alert-status.enum.js';
 import { AlertLevel } from '../../common/enums/alert-level.enum.js';
 import { Role } from '../../common/enums/role.enum.js';
+import { RedisService } from '../../common/redis/redis.service.js';
+import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service.js';
 
 export interface CreateThresholdAlertInput {
   pondId: string;
@@ -25,10 +29,22 @@ export interface CreateThresholdAlertInput {
 
 @Injectable()
 export class AlertsService {
+  private readonly logger = new Logger(AlertsService.name);
+
   constructor(
     @InjectRepository(Alert)
     private readonly alertRepo: Repository<Alert>,
-  ) { }
+    private readonly redisService: RedisService,
+    @Optional()
+    private readonly notificationDispatcher?: NotificationDispatcherService,
+  ) {}
+
+  async createAlert(alertData: Partial<Alert>): Promise<Alert> {
+    const alert = this.alertRepo.create(alertData);
+    const saved = await this.alertRepo.save(alert);
+    await this.publishAlertTriggered(saved);
+    return saved;
+  }
 
   async createThresholdAlert(input: CreateThresholdAlertInput): Promise<Alert> {
     const boundary = input.direction === 'LOW' ? input.minValue : input.maxValue;
@@ -44,7 +60,33 @@ export class AlertsService {
       message: `Chỉ số ${input.metricName} đo được ${input.triggeredValue}, ${comparison} ngưỡng ${boundary} (khoảng cho phép ${input.minValue} - ${input.maxValue}).`,
     });
 
-    return this.alertRepo.save(alert);
+    const saved = await this.alertRepo.save(alert);
+    await this.publishAlertTriggered(saved);
+    return saved;
+  }
+
+  /**
+   * Persist-first outbox boundary for alert consumers. Notification dispatch is
+   * intentionally performed only by AlertNotificationListener after this event.
+   */
+  private async publishAlertTriggered(alert: Alert): Promise<void> {
+    try {
+      await this.redisService.publish(
+        'alert:triggered',
+        JSON.stringify({ pondId: alert.pondId, alert }),
+      );
+    } catch {
+      // The alert is durable even when Redis is transiently unavailable; do
+      // not make telemetry persistence fail because a downstream consumer did.
+      this.logger.error('[AlertsService] Unable to publish alert:triggered event.');
+      // Redis Pub/Sub is not durable. The fallback uses the same dispatcher;
+      // its database claim makes a rare publish-then-error outcome safe.
+      if (this.notificationDispatcher) {
+        void this.notificationDispatcher.dispatchAlert(alert).catch(() => {
+          this.logger.error('[AlertsService] Notification dispatch fallback failed.');
+        });
+      }
+    }
   }
 
   async findAll(

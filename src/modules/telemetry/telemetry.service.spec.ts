@@ -39,7 +39,10 @@ describe('TelemetryService', () => {
     };
 
     mockThresholdConfigRepo = { find: vi.fn().mockResolvedValue([]) };
-    mockAlertsService = { createThresholdAlert: vi.fn().mockResolvedValue({ alertId: 'alert-1' }) };
+    mockAlertsService = {
+      createThresholdAlert: vi.fn().mockResolvedValue({ alertId: 'alert-1' }),
+      createAlert: vi.fn().mockResolvedValue({ alertId: 'offline-alert' }),
+    };
     mockRedisService = {
       setIfAbsent: vi.fn().mockResolvedValue(true),
       del: vi.fn().mockResolvedValue(1),
@@ -176,7 +179,7 @@ describe('TelemetryService', () => {
       }));
     });
 
-    it('publishes one realtime event for each newly persisted HIGH or LOW threshold alert', async () => {
+    it('delegates each newly persisted HIGH or LOW threshold alert to the canonical alert publisher', async () => {
       const device = {
         deviceId: 'device-1',
         pondId: 'pond-1',
@@ -193,16 +196,13 @@ describe('TelemetryService', () => {
       await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 19 });
       await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 31 });
 
-      const alertPublishes = mockRedisService.publish.mock.calls
-        .filter(([channel]: [string]) => channel === 'alert:triggered')
-        .map(([, payload]: [string, string]) => JSON.parse(payload));
-      expect(alertPublishes).toEqual([
-        { pondId: 'pond-1', userId: 'owner-1', alert: { alertId: 'low-alert' } },
-        { pondId: 'pond-1', userId: 'owner-1', alert: { alertId: 'high-alert' } },
-      ]);
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(2);
+      expect(mockRedisService.publish.mock.calls.filter(
+        ([channel]: [string]) => channel === 'alert:triggered',
+      )).toHaveLength(0);
     });
 
-    it('does not publish a threshold alert when cooldown suppresses a repeated breach', async () => {
+    it('does not delegate a threshold alert when cooldown suppresses a repeated breach', async () => {
       mockDeviceRepo.findOne.mockResolvedValue({
         deviceId: 'device-1',
         pondId: 'pond-1',
@@ -216,12 +216,10 @@ describe('TelemetryService', () => {
       await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 31 });
       await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 31 });
 
-      expect(mockRedisService.publish.mock.calls.filter(
-        ([channel]: [string]) => channel === 'alert:triggered',
-      )).toHaveLength(1);
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(1);
     });
 
-    it('keeps persisted telemetry and threshold alert valid when threshold publish fails', async () => {
+    it('keeps persisted telemetry valid when canonical alert publishing is handled downstream', async () => {
       mockDeviceRepo.findOne.mockResolvedValue({
         deviceId: 'device-1',
         pondId: 'pond-1',
@@ -230,10 +228,6 @@ describe('TelemetryService', () => {
       mockThresholdConfigRepo.find.mockResolvedValue([
         { pondId: 'pond-1', metricName: 'temperature', minValue: 20, maxValue: 30, isActive: true },
       ]);
-      mockRedisService.publish
-        .mockResolvedValueOnce(1)
-        .mockRejectedValueOnce(new Error('Redis publish unavailable'));
-
       const result = await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 31 });
 
       expect(result).not.toBeNull();
@@ -802,15 +796,14 @@ describe('TelemetryService', () => {
       expect(mockDevice.status).toBe(DeviceStatus.OFFLINE);
       expect(mockDeviceRepo.save).toHaveBeenCalledWith(mockDevice);
       expect(mockAlertRepo.findOne).toHaveBeenCalled();
-      expect(mockAlertRepo.create).toHaveBeenCalledWith(expect.objectContaining({
+      expect(mockAlertsService.createAlert).toHaveBeenCalledWith(expect.objectContaining({
         pondId: 'test-pond-id',
         deviceId: 'test-device-id',
         metricName: 'device_status',
       }));
-      expect(mockAlertRepo.save).toHaveBeenCalled();
     });
 
-    it('publishes an offline-device alert after the new alert is persisted', async () => {
+    it('creates an offline-device alert through the canonical alert publisher', async () => {
       const device = {
         deviceId: 'offline-device',
         pondId: 'pond-1',
@@ -819,17 +812,11 @@ describe('TelemetryService', () => {
       };
       mockDeviceRepo.findOne.mockResolvedValue(device);
       mockAlertRepo.findOne.mockResolvedValue(null);
-      mockAlertRepo.save.mockResolvedValue({ alertId: 'offline-alert' });
 
       await service.updateDeviceStatus(device.deviceId, DeviceStatus.OFFLINE);
 
-      expect(mockRedisService.publish).toHaveBeenCalledWith(
-        'alert:triggered',
-        JSON.stringify({
-          pondId: 'pond-1',
-          userId: 'owner-1',
-          alert: { alertId: 'offline-alert' },
-        }),
+      expect(mockAlertsService.createAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ pondId: 'pond-1', deviceId: 'offline-device' }),
       );
     });
   });

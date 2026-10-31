@@ -40,7 +40,7 @@ export class TelemetryService implements OnModuleInit {
     private readonly dataSource: DataSource,
     private readonly alertsService: AlertsService,
     private readonly redisService: RedisService,
-  ) { }
+  ) {}
 
   async onModuleInit() {
     await this.ensureTimescaleDbConfig();
@@ -353,7 +353,7 @@ export class TelemetryService implements OnModuleInit {
         }
       }
 
-      const alert = await this.alertsService.createThresholdAlert({
+      await this.alertsService.createThresholdAlert({
         pondId: config.pondId,
         deviceId: device.deviceId,
         metricName: config.metricName,
@@ -364,21 +364,6 @@ export class TelemetryService implements OnModuleInit {
         alertLevel,
       });
 
-      try {
-        await this.redisService.publish(
-          'alert:triggered',
-          JSON.stringify({
-            pondId: config.pondId,
-            userId: device.pond?.userId || null,
-            alert,
-          }),
-        );
-      } catch (error) {
-        this.logger.error(
-          '[Redis Publish Error] Lỗi publish alert:triggered cho threshold alert.',
-          error instanceof Error ? error.stack : String(error),
-        );
-      }
     } catch (error) {
       if (cooldownSet && !isEscalated) {
         try {
@@ -480,7 +465,7 @@ export class TelemetryService implements OnModuleInit {
       });
 
       if (!activeAlert) {
-        const newAlert = this.alertRepo.create({
+        await this.alertsService.createAlert({
           pondId: device.pondId,
           deviceId: device.deviceId,
           metricName: 'device_status',
@@ -489,20 +474,6 @@ export class TelemetryService implements OnModuleInit {
           status: AlertStatus.ACTIVE,
           message: `Thiết bị ${device.deviceName || device.deviceId} mất kết nối mạng đột ngột hoặc quá hạn phản hồi`,
         });
-        const savedAlert = await this.alertRepo.save(newAlert);
-
-        try {
-          await this.redisService.publish(
-            'alert:triggered',
-            JSON.stringify({
-              pondId: device.pondId,
-              userId: device.pond?.userId || null,
-              alert: savedAlert,
-            }),
-          );
-        } catch (err: any) {
-          this.logger.error(`[Redis Publish Error] Lỗi publish alert:triggered: ${err.message}`);
-        }
       }
     }
 

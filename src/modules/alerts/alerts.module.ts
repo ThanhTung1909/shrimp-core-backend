@@ -4,9 +4,15 @@ import { Alert } from './entities/alert.entity.js';
 import { AiRecommendation } from './entities/ai-recommendation.entity.js';
 import { AlertsService } from './alerts.service.js';
 import { AlertsController } from './alerts.controller.js';
+import { RedisModule } from '../../common/redis/redis.module.js';
+import { NotificationsModule } from '../notifications/notifications.module.js';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Alert, AiRecommendation])],
+  imports: [
+    TypeOrmModule.forFeature([Alert, AiRecommendation]),
+    RedisModule,
+    NotificationsModule,
+  ],
   controllers: [AlertsController],
   providers: [AlertsService],
   exports: [TypeOrmModule, AlertsService],
