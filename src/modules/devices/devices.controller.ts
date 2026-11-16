@@ -20,6 +20,7 @@ import { CreateDeviceDto } from './dto/create-device.dto.js';
 import { UpdateDeviceDto } from './dto/update-device.dto.js';
 import { AssignPondDto } from './dto/assign-pond.dto.js';
 import { UpdateDeviceStatusDto } from './dto/update-device-status.dto.js';
+import { ReportDeviceFaultDto } from './dto/report-device-fault.dto.js';
 import { FindDevicesQueryDto } from './dto/find-devices-query.dto.js';
 import { Device } from './entities/device.entity.js';
 
@@ -34,7 +35,7 @@ export class DevicesController {
 
   @Roles(Role.ADMIN, Role.MANAGER)
   @Post()
-  @ApiOperation({ summary: 'Quản trị viên đăng ký thiết bị IoT mới (Địa chỉ MAC)' })
+  @ApiOperation({ summary: 'Quản trị viên / Quản lý đăng ký thiết bị IoT mới (Địa chỉ MAC)' })
   @ApiResponse({ status: 201, description: 'Đăng ký thiết bị thành công' })
   @ApiResponse({ status: 409, description: 'Địa chỉ MAC đã được đăng ký' })
   async createDevice(
@@ -78,7 +79,7 @@ export class DevicesController {
 
   @Roles(Role.ADMIN, Role.MANAGER)
   @Patch(':id')
-  @ApiOperation({ summary: 'Quản trị viên cập nhật thông tin/firmware thiết bị' })
+  @ApiOperation({ summary: 'Quản trị viên / Quản lý cập nhật thông tin/firmware thiết bị' })
   @ApiResponse({ status: 200, description: 'Cập nhật thiết bị thành công' })
   async updateDevice(
     @Param('id', ParseUUIDPipe) deviceId: string,
@@ -100,8 +101,8 @@ export class DevicesController {
 
   @Roles(Role.ADMIN, Role.MANAGER)
   @Patch(':id/pond')
-  @ApiOperation({ summary: 'Gán hoặc gỡ thiết bị IoT khỏi ao nuôi' })
-  @ApiResponse({ status: 200, description: 'Gán/gỡ thiết bị thành công' })
+  @ApiOperation({ summary: 'Gán hoặc chuyển thiết bị IoT sang ao nuôi' })
+  @ApiResponse({ status: 200, description: 'Gán/chuyển thiết bị thành công' })
   async assignToPond(
     @Param('id', ParseUUIDPipe) deviceId: string,
     @CurrentUser('userId') userId: string,
@@ -144,9 +145,44 @@ export class DevicesController {
     };
   }
 
+  @Roles(Role.ADMIN, Role.MANAGER, Role.FARMER)
+  @Post(':id/report-fault')
+  @ApiOperation({ summary: 'Báo cáo sự cố / hỏng hóc thiết bị IoT (Nông dân, Quản lý, Quản trị viên)' })
+  @ApiResponse({ status: 200, description: 'Báo cáo thiết bị hỏng thành công' })
+  async reportFault(
+    @Param('id', ParseUUIDPipe) deviceId: string,
+    @CurrentUser('userId') userId: string,
+    @CurrentUser('role') role: Role,
+    @Body() reportFaultDto: ReportDeviceFaultDto,
+  ): Promise<{ message: string; data: Device }> {
+    const device = await this.devicesService.reportFault(
+      deviceId,
+      reportFaultDto,
+      userId,
+      role,
+    );
+    return {
+      message: 'Báo cáo sự cố thiết bị thành công! Thiết bị đã được chuyển sang trạng thái Bảo trì.',
+      data: device,
+    };
+  }
+
+  @Roles(Role.ADMIN, Role.MANAGER, Role.FARMER)
+  @Post(':id/report-broken')
+  @ApiOperation({ summary: 'Báo cáo thiết bị hỏng (Dành cho Nông dân, Quản lý, Quản trị viên)' })
+  @ApiResponse({ status: 200, description: 'Báo cáo thiết bị hỏng thành công' })
+  async reportBroken(
+    @Param('id', ParseUUIDPipe) deviceId: string,
+    @CurrentUser('userId') userId: string,
+    @CurrentUser('role') role: Role,
+    @Body() reportFaultDto: ReportDeviceFaultDto,
+  ): Promise<{ message: string; data: Device }> {
+    return await this.reportFault(deviceId, userId, role, reportFaultDto);
+  }
+
   @Roles(Role.ADMIN, Role.MANAGER)
   @Delete(':id')
-  @ApiOperation({ summary: 'Quản trị viên xóa thiết bị IoT' })
+  @ApiOperation({ summary: 'Quản trị viên / Quản lý xóa thiết bị IoT' })
   @ApiResponse({ status: 200, description: 'Xóa thiết bị thành công' })
   async deleteDevice(
     @Param('id', ParseUUIDPipe) deviceId: string,
@@ -156,4 +192,3 @@ export class DevicesController {
     return await this.devicesService.deleteDevice(deviceId, userId, role);
   }
 }
-

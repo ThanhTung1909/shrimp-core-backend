@@ -13,6 +13,7 @@ import { Device } from '../../devices/entities/device.entity.js';
 @Entity('telemetry_data')
 @Index('idx_telemetry_device_time', ['deviceId', 'recordedAt'])
 @Index('telemetry_data_recorded_at_idx', ['recordedAt'])
+@Index('idx_telemetry_device_message', ['deviceId', 'messageId'])
 export class TelemetryData {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;
@@ -26,6 +27,9 @@ export class TelemetryData {
 
   @Column({ type: 'uuid', name: 'device_id' })
   deviceId: string;
+
+  @Column({ type: 'varchar', length: 64, name: 'message_id' })
+  messageId: string;
 
   @Column({ type: 'double precision', nullable: true })
   temperature: number | null;

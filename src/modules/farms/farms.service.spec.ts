@@ -5,8 +5,9 @@ import { FarmsService } from './farms.service.js';
 
 function setup() {
   const farms = { create: vi.fn((value: unknown) => value), save: vi.fn(async (value: unknown) => ({ farmId: 'farm', ...value as object })), findOne: vi.fn(), findAndCount: vi.fn(), remove: vi.fn() };
-  const ponds = { exist: vi.fn().mockResolvedValue(false), find: vi.fn() };
-  return { service: new FarmsService(farms as never, ponds as never), farms, ponds };
+  const ponds = { exist: vi.fn().mockResolvedValue(false), find: vi.fn(), update: vi.fn() };
+  const users = { findOneBy: vi.fn() };
+  return { service: new FarmsService(farms as never, ponds as never, users as never), farms, ponds, users };
 }
 describe('FarmsService', () => {
   it('uses the authenticated user as farm owner', async () => {
@@ -34,5 +35,13 @@ describe('FarmsService', () => {
       .resolves.toMatchObject({ farmName: 'Updated by admin' });
     await expect(service.remove('farm', 'admin', Role.ADMIN)).resolves.toEqual({ message: 'Xóa trại nuôi thành công!' });
     expect(farms.remove).toHaveBeenCalled();
+  });
+  it('allows ADMIN to revoke a manager while retaining the farm', async () => {
+    const { service, farms, ponds } = setup();
+    farms.findOne.mockResolvedValue({ farmId: 'farm', ownerId: 'manager-owner', farmName: 'Farm A' });
+    farms.save.mockImplementation(async (farm: any) => farm);
+    await expect(service.revokeManager('farm', 'admin-id', Role.ADMIN))
+      .resolves.toMatchObject({ farmId: 'farm', ownerId: null });
+    expect(ponds.update).toHaveBeenCalledWith({ farmId: 'farm' }, { userId: 'admin-id' });
   });
 });

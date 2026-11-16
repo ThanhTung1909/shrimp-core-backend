@@ -7,7 +7,7 @@ import { PondsService } from '../src/modules/ponds/ponds.service.js';
 const managerId = '11111111-1111-4111-8111-111111111111';
 const farmerId = '22222222-2222-4222-8222-222222222222';
 const otherManagerId = '33333333-3333-4333-833333333333';
-const pond = { pondId: '44444444-4444-4444-8444-444444444444', userId: managerId };
+const pond = { pondId: '44444444-4444-4444-8444-444444444444', userId: managerId, farmId: 'farm-owned' };
 
 describe('P1-3 manager/farmer pond assignment authorization', () => {
   function pondsService(assigned = false) {
@@ -21,7 +21,7 @@ describe('P1-3 manager/farmer pond assignment authorization', () => {
     };
     const users = { findOneBy: vi.fn().mockResolvedValue({ userId: farmerId, role: Role.FARMER }) };
     const service = new PondsService(pondRepo as never, {} as never, {} as never,
-      {} as never, users as never, assignments as never);
+      { findOneBy: vi.fn().mockResolvedValue({ farmId: 'farm-owned', ownerId: managerId }) } as never, users as never, assignments as never);
     return { service, assignments };
   }
 

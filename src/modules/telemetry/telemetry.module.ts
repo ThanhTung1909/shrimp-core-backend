@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { TelemetryData } from './entities/telemetry-data.entity.js';
+import { TelemetryIngestReceipt } from './entities/telemetry-ingest-receipt.entity.js';
 import { Device } from '../devices/entities/device.entity.js';
 import { Alert } from '../alerts/entities/alert.entity.js';
 import { TelemetryService } from './telemetry.service.js';
@@ -22,7 +23,7 @@ import { UsersModule } from '../users/users.module.js';
     RedisModule,
     forwardRef(() => PondsModule),
     UsersModule,
-    TypeOrmModule.forFeature([TelemetryData, Device, Alert, ThresholdConfig]),
+    TypeOrmModule.forFeature([TelemetryData, TelemetryIngestReceipt, Device, Alert, ThresholdConfig]),
     AlertsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

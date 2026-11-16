@@ -90,7 +90,7 @@ describe('DATABASE SECURITY & INTEGRITY AUDIT (PHASE 10)', () => {
         findOne: vi.fn().mockResolvedValue({ pondId: 'pond-1', userId: 'user-1' }),
       };
 
-      const devicesService = new DevicesService(mockDeviceRepo, mockPondRepo);
+      const devicesService = new DevicesService(mockDeviceRepo, mockPondRepo, {} as any, {} as any, {} as any);
 
       await expect(
         devicesService.createDevice(
@@ -100,7 +100,7 @@ describe('DATABASE SECURITY & INTEGRITY AUDIT (PHASE 10)', () => {
             pondId: 'pond-1',
           },
           'user-1',
-          Role.FARMER,
+          Role.ADMIN,
         ),
       ).rejects.toThrow(ConflictException);
 
@@ -132,14 +132,14 @@ describe('DATABASE SECURITY & INTEGRITY AUDIT (PHASE 10)', () => {
       };
       const mockPondRepo: any = {};
 
-      const devicesService = new DevicesService(mockDeviceRepo, mockPondRepo);
+      const devicesService = new DevicesService(mockDeviceRepo, mockPondRepo, {} as any, {} as any, {} as any);
 
       await expect(
         devicesService.updateDevice(
           dev1Id,
           { macAddress: dev2Mac },
           'user-1',
-          Role.FARMER,
+          Role.ADMIN,
         ),
       ).rejects.toThrow(ConflictException);
     });

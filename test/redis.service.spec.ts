@@ -86,4 +86,18 @@ describe('REDIS SERVICE INFRASTRUCTURE SUITE', () => {
     const val = await redisService.get(key);
     expect(val).toBeNull();
   });
+
+  it('7. atomically permits one WARNING and one CRITICAL escalation only', async () => {
+    const key = `${testPrefix}alert-cooldown`;
+
+    await expect(redisService.reserveAlertCooldown(key, 'WARNING', 60)).resolves.toBe('created');
+    await expect(redisService.reserveAlertCooldown(key, 'WARNING', 60)).resolves.toBe('suppressed');
+
+    const criticalResults = await Promise.all([
+      redisService.reserveAlertCooldown(key, 'CRITICAL', 60),
+      redisService.reserveAlertCooldown(key, 'CRITICAL', 60),
+    ]);
+    expect(criticalResults.filter((result) => result === 'escalated')).toHaveLength(1);
+    expect(criticalResults.filter((result) => result === 'suppressed')).toHaveLength(1);
+  });
 });

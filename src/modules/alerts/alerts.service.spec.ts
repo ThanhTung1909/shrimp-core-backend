@@ -126,11 +126,11 @@ describe('AlertsService', () => {
       expect(queryBuilder.leftJoinAndSelect).toHaveBeenCalledWith('alert.pond', 'pond');
       expect(queryBuilder.leftJoinAndSelect).toHaveBeenCalledWith('alert.device', 'device');
       expect(queryBuilder.andWhere).toHaveBeenCalledWith(
-        'pond.user_id = :currentUserId',
+        '(pond.user_id = :currentUserId OR EXISTS (SELECT 1 FROM pond_farmer_assignments pfa WHERE pfa.pond_id = pond.pond_id AND pfa.farmer_id = :currentUserId))',
         { currentUserId: 'farmer-1' },
       );
       expect(queryBuilder.andWhere).toHaveBeenCalledWith(
-        'alert.deviceId = :deviceId',
+        'alert.device_id = :deviceId',
         { deviceId: 'device-1' },
       );
       expect(queryBuilder.andWhere).toHaveBeenCalledWith(

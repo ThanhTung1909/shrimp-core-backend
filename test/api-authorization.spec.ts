@@ -227,8 +227,48 @@ describe('API AUTHORIZATION & SECURITY AUDIT (PHASE 9)', () => {
       }),
     };
 
+    // QueryBuilder mock: lọc thiết bị theo quyền truy cập ao
+    const createDeviceQueryBuilder = () => {
+      let currentUserId: string | undefined;
+      let pageSkip = 0;
+      let pageTake = 10;
+
+      const qb: any = {
+        leftJoinAndSelect: vi.fn(() => qb),
+        innerJoin: vi.fn(() => qb),
+        leftJoin: vi.fn(() => qb),
+        andWhere: vi.fn((condition: string, params: any) => {
+          if (condition.includes('currentUserId')) {
+            currentUserId = params.currentUserId;
+          }
+          return qb;
+        }),
+        orderBy: vi.fn(() => qb),
+        skip: vi.fn((value: number) => {
+          pageSkip = value;
+          return qb;
+        }),
+        take: vi.fn((value: number) => {
+          pageTake = value;
+          return qb;
+        }),
+        getManyAndCount: vi.fn(async () => {
+          const accessible = devicesStore.filter((device) => {
+            if (!currentUserId) return true;
+            return device.pond?.userId === currentUserId;
+          });
+          return [
+            accessible.slice(pageSkip, pageSkip + pageTake),
+            accessible.length,
+          ];
+        }),
+      };
+      return qb;
+    };
+
     // Mock Device Repo
     const deviceRepo: any = {
+      createQueryBuilder: vi.fn(createDeviceQueryBuilder),
       create: vi.fn((dto) => ({
         deviceId: 'dev-new-' + Math.random(),
         ...dto,
@@ -261,7 +301,29 @@ describe('API AUTHORIZATION & SECURITY AUDIT (PHASE 9)', () => {
     pondsService = new PondsService(pondRepo, thresholdRepo, manualLogRepo);
     pondsController = new PondsController(pondsService);
 
-    devicesService = new DevicesService(deviceRepo, pondRepo);
+    const farmRepo: any = {
+      findOne: vi.fn(async () => null),
+      findOneBy: vi.fn(async () => null),
+    };
+
+    const assignmentRepo: any = {
+      exist: vi.fn(async (options) => {
+        const { pondId, farmerId } = options.where;
+        return pondsStore.some(
+          (pond) => pond.pondId === pondId && pond.userId === farmerId,
+        );
+      }),
+    };
+
+    const alertRepo: any = {};
+
+    devicesService = new DevicesService(
+      deviceRepo,
+      pondRepo,
+      farmRepo,
+      assignmentRepo,
+      alertRepo,
+    );
     devicesController = new DevicesController(devicesService);
 
     const usersRepo: any = {

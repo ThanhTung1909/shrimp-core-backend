@@ -74,7 +74,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
         // Handle ValidationPipe array messages
         if (Array.isArray(resObj.message)) {
-          message = 'Dữ liệu đầu vào không hợp lệ';
+          message = resObj.message.join('; ') || 'Dữ liệu đầu vào không hợp lệ';
           errors = resObj.message;
           errorCode = 'VALIDATION_ERROR';
         } else {

@@ -2,6 +2,8 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
 
+export type AlertCooldownReservation = 'created' | 'escalated' | 'suppressed';
+
 @Injectable()
 export class RedisService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
@@ -100,6 +102,42 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   async setIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean> {
     const result = await this.client.set(key, value, 'EX', ttlSeconds, 'NX');
     return result === 'OK';
+  }
+
+  /**
+   * Atomically reserve an alert slot for a cooldown window.  The old
+   * SETNX -> GET level -> SET level sequence allowed two concurrent CRITICAL
+   * packets to both observe WARNING and produce duplicate escalation alerts.
+   */
+  async reserveAlertCooldown(
+    cooldownKey: string,
+    level: 'WARNING' | 'CRITICAL',
+    ttlSeconds: number,
+  ): Promise<AlertCooldownReservation> {
+    const result = await this.client.eval(
+      `local current = redis.call('GET', KEYS[1])
+       if not current then
+         redis.call('SET', KEYS[1], '1', 'EX', ARGV[2])
+         redis.call('SET', KEYS[2], ARGV[1], 'EX', ARGV[2])
+         return 'created'
+       end
+       local previousLevel = redis.call('GET', KEYS[2])
+       if ARGV[1] == 'CRITICAL' and previousLevel ~= 'CRITICAL' then
+         redis.call('SET', KEYS[2], 'CRITICAL', 'EX', ARGV[2])
+         return 'escalated'
+       end
+       return 'suppressed'`,
+      2,
+      cooldownKey,
+      `${cooldownKey}:level`,
+      level,
+      String(ttlSeconds),
+    );
+
+    if (result === 'created' || result === 'escalated' || result === 'suppressed') {
+      return result;
+    }
+    throw new Error(`Unexpected alert cooldown reservation result: ${String(result)}`);
   }
 
   /**

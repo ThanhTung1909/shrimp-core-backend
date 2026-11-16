@@ -10,13 +10,13 @@ export class DeviceHealthService {
   constructor(
     private readonly configService: ConfigService,
     private readonly telemetryService: TelemetryService,
-  ) {}
+  ) { }
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleCron() {
     try {
       this.logger.debug('[Cron] Đang quét kiểm tra các thiết bị mất kết nối...');
-      const timeoutMinutes = this.configService.get<number>('DEVICE_STALE_TIMEOUT_MINUTES') || 15;
+      const timeoutMinutes = this.configService.get<number>('DEVICE_STALE_TIMEOUT_MINUTES') || 2;
       await this.telemetryService.checkAndMarkOfflineDevices(timeoutMinutes);
     } catch (error) {
       this.logger.error('[Cron] Lỗi khi quét thiết bị mất kết nối', error);

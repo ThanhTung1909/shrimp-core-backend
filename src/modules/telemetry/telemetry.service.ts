@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
 import { TelemetryData } from './entities/telemetry-data.entity.js';
+import { TelemetryIngestReceipt } from './entities/telemetry-ingest-receipt.entity.js';
 import { Device } from '../devices/entities/device.entity.js';
 import { DeviceStatus } from '../../common/enums/device-status.enum.js';
 import { CreateTelemetryDto } from './dto/create-telemetry.dto.js';
@@ -20,6 +21,7 @@ const THRESHOLD_METRICS = [
   { property: 'dissolvedOxygen', normalized: 'dissolvedoxygen' },
   { property: 'salinity', normalized: 'salinity' },
   { property: 'turbidity', normalized: 'turbidity' },
+  { property: 'waterLevel', normalized: 'waterlevel' },
 ] as const;
 
 type ThresholdMetricProperty = (typeof THRESHOLD_METRICS)[number]['property'];
@@ -94,7 +96,11 @@ export class TelemetryService implements OnModuleInit {
    * 2. Nếu không tìm thấy: Ghi Security Warning Log và từ chối lưu
    * 3. Nếu hợp lệ: Lưu TimescaleDB, cập nhật thiết bị, publish realtime và đánh giá threshold
    */
-  async processTelemetryPayload(dto: CreateTelemetryDto): Promise<TelemetryData | null> {
+  async processTelemetryPayloadWithAck(dto: CreateTelemetryDto): Promise<{
+    record: TelemetryData | null;
+    acknowledged: boolean;
+    duplicate: boolean;
+  }> {
     const device = await this.deviceRepo.findOne({
       where: { deviceId: dto.deviceId },
       relations: { pond: true },
@@ -114,30 +120,66 @@ export class TelemetryService implements OnModuleInit {
       this.logger.warn(
         `[Security Warning] Nhận gói tin từ thiết bị chưa đăng ký trên hệ thống (deviceId: ${dto.deviceId}). Từ chối xử lý dữ liệu.`,
       );
-      return null;
+      return { record: null, acknowledged: false, duplicate: false };
     }
 
     const recordedAt = dto.recordedAt ? new Date(dto.recordedAt) : new Date();
 
-    const telemetryRecord = this.telemetryRepo.create({
-      deviceId: dto.deviceId,
-      temperature: dto.temperature ?? null,
-      ph: dto.ph ?? null,
-      salinity: dto.salinity ?? null,
-      dissolvedOxygen: dto.dissolvedOxygen ?? null,
-      turbidity: dto.turbidity ?? null,
-      waterLevel: dto.waterLevel ?? null,
-      isBuffered: dto.isBuffered ?? false,
-      recordedAt,
+    const savedResult = await this.dataSource.transaction(async (manager) => {
+      const receiptResult = await manager
+        .createQueryBuilder()
+        .insert()
+        .into(TelemetryIngestReceipt)
+        .values({ deviceId: dto.deviceId, messageId: dto.messageId, telemetryId: null })
+        .orIgnore()
+        // PostgreSQL returns one row only when INSERT actually won the unique
+        // constraint. TypeORM's `identifiers` is populated even after
+        // `ON CONFLICT DO NOTHING`, so it cannot distinguish a retry.
+        .returning('id')
+        .execute();
+
+      if (!receiptResult.raw?.length) {
+        return { record: null, duplicate: true };
+      }
+
+      const telemetryRecord = manager.create(TelemetryData, {
+        deviceId: dto.deviceId,
+        messageId: dto.messageId,
+        temperature: dto.temperature ?? null,
+        ph: dto.ph ?? null,
+        salinity: dto.salinity ?? null,
+        dissolvedOxygen: dto.dissolvedOxygen ?? null,
+        turbidity: dto.turbidity ?? null,
+        waterLevel: dto.waterLevel ?? null,
+        isBuffered: dto.isBuffered ?? false,
+        recordedAt,
+      });
+
+      const record = await manager.save(telemetryRecord);
+      await manager.update(TelemetryIngestReceipt, {
+        deviceId: dto.deviceId,
+        messageId: dto.messageId,
+      }, { telemetryId: record.id });
+      // MAINTENANCE is an operator-controlled state. Telemetry is retained,
+      // but must not revive the device or affect its liveness state.
+      if (device.status !== DeviceStatus.MAINTENANCE) {
+        await manager.update(Device, dto.deviceId, {
+          status: DeviceStatus.ONLINE,
+          lastActiveAt: new Date(),
+        });
+      }
+
+      return { record, duplicate: false };
     });
 
-    const savedRecord = await this.telemetryRepo.save(telemetryRecord);
+    if (savedResult.duplicate) {
+      this.logger.debug?.(
+        `[Telemetry] Duplicate acknowledged device=${dto.deviceId} messageId=${dto.messageId}`,
+      );
+      return { record: null, acknowledged: true, duplicate: true };
+    }
 
-    // Cập nhật trạng thái hoạt động thụ động cho thiết bị (Implicit Update)
-    await this.deviceRepo.update(dto.deviceId, {
-      status: DeviceStatus.ONLINE,
-      lastActiveAt: new Date(),
-    });
+    const savedRecord = savedResult.record;
 
     this.logger.log(
       `[Telemetry] Đã lưu dữ liệu cảm biến cho thiết bị ${dto.deviceId} vào TimescaleDB.`,
@@ -158,6 +200,46 @@ export class TelemetryService implements OnModuleInit {
 
     await this.evaluateThresholds(device, dto);
 
+    return { record: savedRecord, acknowledged: true, duplicate: false };
+  }
+
+  /** Legacy ingestion API retained for existing REST/unit-test callers. MQTT
+   * uses processTelemetryPayloadWithAck() so its receipt and telemetry rows
+   * are committed atomically before an application ACK is emitted. */
+  async processTelemetryPayload(dto: CreateTelemetryDto): Promise<TelemetryData | null> {
+    const device = await this.deviceRepo.findOne({
+      where: { deviceId: dto.deviceId },
+      relations: { pond: true },
+      select: {
+        deviceId: true, pondId: true, status: true, lastActiveAt: true,
+        pond: { pondId: true, userId: true },
+      },
+    });
+    if (!device) {
+      this.logger.warn(`[Security Warning] Nhận gói tin từ thiết bị chưa đăng ký trên hệ thống (deviceId: ${dto.deviceId}). Từ chối xử lý dữ liệu.`);
+      return null;
+    }
+    const telemetryRecord = this.telemetryRepo.create({
+      deviceId: dto.deviceId,
+      messageId: dto.messageId,
+      temperature: dto.temperature ?? null, ph: dto.ph ?? null,
+      salinity: dto.salinity ?? null, dissolvedOxygen: dto.dissolvedOxygen ?? null,
+      turbidity: dto.turbidity ?? null, waterLevel: dto.waterLevel ?? null,
+      isBuffered: dto.isBuffered ?? false,
+      recordedAt: dto.recordedAt ? new Date(dto.recordedAt) : new Date(),
+    });
+    const savedRecord = await this.telemetryRepo.save(telemetryRecord);
+    if (device.status !== DeviceStatus.MAINTENANCE) {
+      await this.deviceRepo.update(dto.deviceId, { status: DeviceStatus.ONLINE, lastActiveAt: new Date() });
+    }
+    try {
+      await this.redisService.publish('telemetry:new', JSON.stringify({
+        pondId: device.pondId, userId: device.pond?.userId || null, data: savedRecord,
+      }));
+    } catch (err: any) {
+      this.logger.error(`[Redis Publish Error] Lỗi publish telemetry:new: ${err.message}`);
+    }
+    await this.evaluateThresholds(device, dto);
     return savedRecord;
   }
 
@@ -214,7 +296,7 @@ export class TelemetryService implements OnModuleInit {
     if (
       (normalizedMetric === 'dissolvedoxygen' && value < 3.0) ||
       (normalizedMetric === 'ph' && (value < 6.8 || value > 9.2)) ||
-      deviationPercent >= 0.25
+      deviationPercent >= (0.25 - Number.EPSILON)
     ) {
       return AlertLevel.CRITICAL;
     }
@@ -233,9 +315,9 @@ export class TelemetryService implements OnModuleInit {
 
     if (!device || !device.pondId) return;
 
-    if (dto.isBuffered) {
+    if (dto.isBuffered || device.status === DeviceStatus.MAINTENANCE) {
       this.logger.debug?.(
-        `[Alert Engine] Bỏ qua đánh giá ngưỡng cho telemetry được đệm (isBuffered: true, deviceId: ${device.deviceId}).`,
+        `[Alert Engine] Bỏ qua đánh giá ngưỡng cho telemetry không thời gian thực (isBuffered: ${dto.isBuffered === true}, status: ${device.status}, deviceId: ${device.deviceId}).`,
       );
       return;
     }
@@ -313,44 +395,20 @@ export class TelemetryService implements OnModuleInit {
       direction,
     );
 
-    let cooldownSet = false;
-    let isEscalated = false;
+    // Default is safe for a Redis failure before any reservation is made.
+    let reservation: 'created' | 'escalated' | 'suppressed' = 'suppressed';
 
     try {
-      cooldownSet = await this.redisService.setIfAbsent(
+      reservation = await this.redisService.reserveAlertCooldown(
         cooldownKey,
-        '1',
+        alertLevel,
         THRESHOLD_COOLDOWN_SECONDS,
       );
-
-      // Nếu cooldown đã tồn tại (setIfAbsent trả về false), kiểm tra xem có Delta Escalation lên CRITICAL không
-      if (!cooldownSet) {
-        if (typeof this.redisService.get === 'function') {
-          try {
-            const existingLevel = await this.redisService.get(`${cooldownKey}:level`);
-            if (alertLevel === AlertLevel.CRITICAL && existingLevel !== AlertLevel.CRITICAL) {
-              isEscalated = true;
-              this.logger.warn(
-                `[Alert Engine Escalation] Phá vỡ cooldown cho ao ${config.pondId || device.pondId}, thiết bị ${device.deviceId}, chỉ số ${config.metricName}: Thang đo nâng lên CRITICAL (giá trị: ${triggeredValue}).`,
-              );
-              if (typeof this.redisService.set === 'function') {
-                await this.redisService.set(`${cooldownKey}:level`, AlertLevel.CRITICAL, THRESHOLD_COOLDOWN_SECONDS);
-              }
-            }
-          } catch {
-            // Safe ignore
-          }
-        }
-
-        if (!isEscalated) return;
-      } else {
-        if (typeof this.redisService.set === 'function') {
-          try {
-            await this.redisService.set(`${cooldownKey}:level`, alertLevel, THRESHOLD_COOLDOWN_SECONDS);
-          } catch {
-            // Safe ignore
-          }
-        }
+      if (reservation === 'suppressed') return;
+      if (reservation === 'escalated') {
+        this.logger.warn(
+          `[Alert Engine Escalation] Atomic escalation to CRITICAL for pond ${config.pondId || device.pondId}, device ${device.deviceId}, metric ${config.metricName} (value: ${triggeredValue}).`,
+        );
       }
 
       await this.alertsService.createThresholdAlert({
@@ -365,9 +423,9 @@ export class TelemetryService implements OnModuleInit {
       });
 
     } catch (error) {
-      if (cooldownSet && !isEscalated) {
+      if (reservation === 'created') {
         try {
-          await this.redisService.del(cooldownKey);
+          await this.redisService.del(cooldownKey, `${cooldownKey}:level`);
         } catch (cleanupError) {
           this.logger.error(
             `[Alert Engine] Không thể xóa cooldown lỗi cho ${cooldownKey}.`,

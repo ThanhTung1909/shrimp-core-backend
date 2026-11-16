@@ -16,6 +16,10 @@ export class TelemetryMqttService implements OnModuleInit, OnModuleDestroy {
   private readonly topicPattern = 'telemetry/devices/+/data';
   private readonly statusTopicPattern = 'telemetry/devices/+/status';
 
+  private ackTopic(deviceId: string): string {
+    return `telemetry/devices/${deviceId}/ack`;
+  }
+
   constructor(
     private readonly configService: ConfigService,
     private readonly telemetryService: TelemetryService,
@@ -115,7 +119,25 @@ export class TelemetryMqttService implements OnModuleInit, OnModuleDestroy {
           return;
         }
 
-        await this.telemetryService.processTelemetryPayload(dto);
+        // Never ACK invalid/unknown data.  ACK only after the DB transaction
+        // completed, including duplicate detection by messageId.
+        const result = await this.telemetryService.processTelemetryPayloadWithAck(dto);
+        if (result.acknowledged) {
+          this.client.publish(
+            this.ackTopic(dto.deviceId),
+            JSON.stringify({
+              deviceId: dto.deviceId,
+              messageId: dto.messageId,
+              status: result.duplicate ? 'duplicate' : 'stored',
+            }),
+            { qos: 0, retain: false },
+            (err) => {
+              if (err) {
+                this.logger.error(`[MQTT ACK] Publish failed: ${err.message}`);
+              }
+            },
+          );
+        }
       } else if (type === 'status') {
         const dto = plainToInstance(DeviceStatusMqttDto, parsedJson);
         const errors = await validate(dto);

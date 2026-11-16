@@ -80,23 +80,27 @@ export class UsersController {
 
   // API 3: Quản trị viên lấy danh sách tất cả người dùng
   @Get()
-  @Roles(Role.MANAGER)
+  @Roles(Role.ADMIN, Role.MANAGER)
   @ApiOperation({ summary: 'Quản trị viên lấy danh sách người dùng (Có phân trang & Tìm kiếm)' })
   @ApiResponse({ status: 200, description: 'Danh sách người dùng phân trang' })
   @ApiResponse({ status: 403, description: 'Không có quyền truy cập' })
-  async getAllUsers(@Query() query: FindUsersQueryDto): Promise<{
+  async getAllUsers(
+    @Query() query: FindUsersQueryDto,
+    @CurrentUser('userId') actorId: string,
+    @CurrentUser('role') actorRole: Role,
+  ): Promise<{
     data: Omit<User, 'passwordHash'>[];
     total: number;
     page: number;
     limit: number;
     totalPages: number;
   }> {
-    return this.usersService.findAll(query);
+    return this.usersService.findAll(query, actorId, actorRole);
   }
 
   // API 4: Quản trị viên tạo người dùng mới
   @Post()
-  @Roles(Role.MANAGER)
+  @Roles(Role.ADMIN, Role.MANAGER)
   @ApiOperation({ summary: 'Quản trị viên khởi tạo tài khoản người dùng mới' })
   @ApiResponse({ status: 201, description: 'Tạo người dùng thành công' })
   @ApiResponse({ status: 409, description: 'Số điện thoại đã tồn tại' })
@@ -113,6 +117,7 @@ export class UsersController {
 
   // API 5: Lấy thông tin chi tiết người dùng theo ID
   @Get(':id')
+  @Roles(Role.ADMIN, Role.MANAGER, Role.FARMER)
   @ApiOperation({ summary: 'Lấy thông tin chi tiết người dùng theo UUID' })
   @ApiResponse({ status: 200, description: 'Chi tiết người dùng' })
   @ApiResponse({ status: 404, description: 'Không tìm thấy người dùng' })
@@ -121,7 +126,8 @@ export class UsersController {
     @CurrentUser('userId') currentUserId: string,
     @CurrentUser('role') role: Role,
   ): Promise<Omit<User, 'passwordHash'>> {
-    if (role !== Role.MANAGER && currentUserId !== id) {
+    const normalizedRole = role ? String(role).toUpperCase() : '';
+    if (normalizedRole !== Role.ADMIN && normalizedRole !== Role.MANAGER && currentUserId !== id) {
       throw new ForbiddenException(
         'Bạn không có quyền truy cập thông tin của người dùng khác!',
       );
@@ -129,6 +135,9 @@ export class UsersController {
     const user = await this.usersService.findById(id);
     if (!user) {
       throw new NotFoundException('Không tìm thấy người dùng!');
+    }
+    if (normalizedRole === Role.MANAGER) {
+      await this.usersService.assertManagerCanManageUser(currentUserId, user);
     }
     return this.usersService.sanitizeUser(user);
   }
@@ -148,7 +157,7 @@ export class UsersController {
   }
 
   @Patch(':id')
-  @Roles(Role.MANAGER)
+  @Roles(Role.ADMIN, Role.MANAGER)
   @ApiOperation({ summary: 'Quản trị viên cập nhật thông tin hoặc trạng thái tài khoản người dùng' })
   @ApiResponse({ status: 200, description: 'Cập nhật tài khoản thành công' })
   async adminUpdateUser(
@@ -172,7 +181,7 @@ export class UsersController {
 
   // API 7: Quản trị viên xóa người dùng
   @Delete(':id')
-  @Roles(Role.MANAGER)
+  @Roles(Role.ADMIN, Role.MANAGER)
   @ApiOperation({ summary: 'Quản trị viên xóa tài khoản người dùng' })
   @ApiResponse({ status: 200, description: 'Xóa tài khoản người dùng thành công' })
   async deleteUser(

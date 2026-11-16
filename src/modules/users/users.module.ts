@@ -1,12 +1,14 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from './entities/user.entity.js';
+import { Pond } from '../ponds/entities/pond.entity.js';
+import { PondFarmerAssignment } from '../ponds/entities/pond-farmer-assignment.entity.js';
 import { UsersService } from './users.service.js';
 import { UsersController } from './users.controller.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User]), NotificationsModule],
+  imports: [TypeOrmModule.forFeature([User, Pond, PondFarmerAssignment]), NotificationsModule],
   controllers: [UsersController],
   providers: [UsersService],
   exports: [UsersService],
