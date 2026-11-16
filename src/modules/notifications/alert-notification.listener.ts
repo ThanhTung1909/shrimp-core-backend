@@ -1,4 +1,5 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { RedisService } from '../../common/redis/redis.service.js';
 import { AlertLevel } from '../../common/enums/alert-level.enum.js';
 import { NotificationDispatcherService } from './notification-dispatcher.service.js';
@@ -27,10 +28,22 @@ export class AlertNotificationListener implements OnModuleInit, OnModuleDestroy 
   constructor(
     private readonly redisService: RedisService,
     private readonly notificationDispatcher: NotificationDispatcherService,
+    @Optional()
+    private readonly configService?: ConfigService,
   ) {}
 
   onModuleInit() {
+    if (!this.notificationsEnabled()) {
+      this.logger.log('[Alert Listener] Dispatch thông báo đã được tắt bằng cấu hình runtime.');
+      return;
+    }
     this.setupRedisSubscriber();
+  }
+
+  private notificationsEnabled(): boolean {
+    return (this.configService?.get<string>('NOTIFICATIONS_ENABLED') ?? 'true')
+      .trim()
+      .toLowerCase() !== 'false';
   }
 
   async onModuleDestroy() {
@@ -73,6 +86,8 @@ export class AlertNotificationListener implements OnModuleInit, OnModuleDestroy 
   }
 
   async handleAlertMessage(rawMessage: string): Promise<void> {
+    if (!this.notificationsEnabled()) return;
+
     try {
       const payload = JSON.parse(rawMessage) as AlertTriggeredEventPayload;
       const { pondId, alert } = payload;

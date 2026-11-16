@@ -14,6 +14,11 @@ export class DeviceHealthService {
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleCron() {
+    const backgroundJobsEnabled = (
+      this.configService.get<string>('BACKGROUND_JOBS_ENABLED') ?? 'true'
+    ).trim().toLowerCase() !== 'false';
+    if (!backgroundJobsEnabled) return;
+
     try {
       this.logger.debug('[Cron] Đang quét kiểm tra các thiết bị mất kết nối...');
       const timeoutMinutes = this.configService.get<number>('DEVICE_STALE_TIMEOUT_MINUTES') || 2;

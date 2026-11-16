@@ -9,6 +9,7 @@ import { PredictionQueueProcessor } from './processors/prediction.processor.js';
 import { PredictionSchedulerService } from './prediction-scheduler.service.js';
 import { PredictionsController } from './predictions.controller.js';
 import { TelemetryModule } from '../telemetry/telemetry.module.js';
+import { PondsModule } from '../ponds/ponds.module.js';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { TelemetryModule } from '../telemetry/telemetry.module.js';
       name: QUEUE_PREDICTIONS,
     }),
     TelemetryModule,
+    PondsModule,
   ],
   controllers: [PredictionsController],
   providers: [

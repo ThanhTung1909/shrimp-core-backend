@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { NotificationDelivery } from './entities/notification-delivery.entity.js';
@@ -42,13 +43,26 @@ export class NotificationDispatcherService {
     private readonly fcmService: FcmService,
     private readonly esmsService: EsmsService,
     private readonly emailService: EmailService,
+    @Optional()
+    private readonly configService?: ConfigService,
   ) {}
+
+  private notificationsEnabled(): boolean {
+    return (this.configService?.get<string>('NOTIFICATIONS_ENABLED') ?? 'true')
+      .trim()
+      .toLowerCase() !== 'false';
+  }
 
   /**
    * Phương thức dispatch chính khi có cảnh báo mới
    * Đảm bảo tính non-blocking, độc lập kênh và idempotency
    */
   async dispatchAlert(alert: Alert | AlertDispatchPayload): Promise<void> {
+    if (!this.notificationsEnabled()) {
+      this.logger.debug('[Dispatcher] Bỏ qua dispatch vì NOTIFICATIONS_ENABLED=false.');
+      return;
+    }
+
     try {
       this.logger.log(`[Dispatcher] Processing ${alert.alertLevel} alert.`);
 
