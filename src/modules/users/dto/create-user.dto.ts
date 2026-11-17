@@ -8,6 +8,7 @@ import {
   IsString,
   Length,
   Matches,
+  IsUUID,
 } from 'class-validator';
 import { Role } from '../../../common/enums/role.enum.js';
 import { Gender } from '../../../common/enums/gender.enum.js';
@@ -49,5 +50,10 @@ export class CreateUserDto {
   @IsOptional()
   @IsBoolean({ message: 'mustChangePassword phải là boolean!' })
   mustChangePassword?: boolean;
+
+  /** Required for manager-created farmers to establish farm scope immediately. */
+  @IsOptional()
+  @IsUUID('4', { message: 'pondId phải là chuỗi UUID v4 hợp lệ!' })
+  pondId?: string;
 }
 

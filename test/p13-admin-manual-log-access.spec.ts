@@ -7,7 +7,7 @@ const adminId = '00000000-0000-4000-8000-000000000001';
 const managerId = '11111111-1111-4111-8111-111111111111';
 const otherManagerId = '33333333-3333-4333-8333-333333333333';
 const farmerId = '22222222-2222-4222-8222-222222222222';
-const pond = { pondId: '44444444-4444-4444-8444-444444444444', userId: managerId };
+const pond = { pondId: '44444444-4444-4444-8444-444444444444', userId: managerId, farmId: 'farm-owned' };
 const log = { logId: '55555555-5555-4555-8555-555555555555', pond, pondId: pond.pondId, note: 'initial' };
 
 function setup(assigned = true) {
@@ -27,7 +27,7 @@ function setup(assigned = true) {
     { findOne: vi.fn().mockResolvedValue(pond) } as never,
     {} as never,
     manualLogRepo as never,
-    {} as never,
+    { findOneBy: vi.fn().mockResolvedValue({ farmId: 'farm-owned', ownerId: managerId }) } as never,
     { findOneBy: vi.fn().mockResolvedValue({ userId: farmerId, role: Role.FARMER }) } as never,
     assignmentRepo as never,
   );
@@ -63,7 +63,7 @@ describe('P1-3 ADMIN assignment and Manual Log authorization', () => {
     await expect(service.assignFarmer(pond.pondId, farmerId, adminId, Role.ADMIN))
       .resolves.toMatchObject({ pondId: pond.pondId, farmerId });
     await expect(service.revokeFarmer(pond.pondId, farmerId, adminId, Role.ADMIN))
-      .resolves.toEqual({ message: 'Thu hồi phân công FARMER thành công!' });
+      .resolves.toEqual({ message: 'Thu hồi phân công ao nuôi thành công!' });
     expect(assignmentRepo.save).toHaveBeenCalled();
     expect(assignmentRepo.remove).toHaveBeenCalled();
   });

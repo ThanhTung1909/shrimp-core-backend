@@ -61,7 +61,7 @@ describe('AllExceptionsFilter', () => {
       expect.objectContaining({
         success: false,
         statusCode: 400,
-        message: 'Dữ liệu đầu vào không hợp lệ',
+        message: 'email must be an email; password is too short',
         errorCode: 'VALIDATION_ERROR',
         errors: ['email must be an email', 'password is too short'],
       }),

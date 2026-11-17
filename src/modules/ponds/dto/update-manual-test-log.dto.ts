@@ -23,5 +23,5 @@ export class UpdateManualTestLogDto {
 
   @IsOptional()
   @IsDateString({}, { message: 'Thời gian đo phải theo định dạng ISO Date!' })
-  testedAt?: Date;
+  testedAt?: string;
 }

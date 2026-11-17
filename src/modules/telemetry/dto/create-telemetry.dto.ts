@@ -1,5 +1,5 @@
 import {
-  IsUUID,
+  IsString,
   IsNumber,
   IsOptional,
   IsBoolean,
@@ -8,7 +8,11 @@ import {
 } from 'class-validator';
 
 export class CreateTelemetryDto {
-  @IsUUID()
+  @IsString()
+  @IsNotEmpty()
+  messageId: string;
+
+  @IsString()
   @IsNotEmpty()
   deviceId: string;
 

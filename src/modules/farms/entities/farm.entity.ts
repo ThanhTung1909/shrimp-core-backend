@@ -10,8 +10,9 @@ export class Farm {
   @Column({ name: 'farm_name', type: 'varchar', length: 150 })
   farmName: string;
 
-  @Column({ name: 'owner_id', type: 'uuid' })
-  ownerId: string;
+  // A farm may temporarily be unassigned after an ADMIN revokes its manager.
+  @Column({ name: 'owner_id', type: 'uuid', nullable: true })
+  ownerId: string | null;
 
   @Column({ type: 'varchar', length: 500, nullable: true })
   address: string | null;
@@ -25,7 +26,7 @@ export class Farm {
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 
-  @ManyToOne(() => User, (user) => user.farms, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => User, (user) => user.farms, { onDelete: 'RESTRICT', nullable: true })
   @JoinColumn({ name: 'owner_id' })
   owner: Relation<User>;
 

@@ -48,6 +48,11 @@ describe('TelemetryService', () => {
       del: vi.fn().mockResolvedValue(1),
       publish: vi.fn().mockResolvedValue(1),
     };
+    // Preserve the existing test controls while modelling the production
+    // atomic reservation primitive.
+    mockRedisService.reserveAlertCooldown = vi.fn(async (key, _level, ttl) =>
+      (await mockRedisService.setIfAbsent(key, '1', ttl)) ? 'created' : 'suppressed',
+    );
 
     service = new TelemetryService(
       mockTelemetryRepo,
@@ -58,6 +63,75 @@ describe('TelemetryService', () => {
       mockAlertsService,
       mockRedisService,
     );
+  });
+
+  describe('processTelemetryPayloadWithAck', () => {
+    const device = {
+      deviceId: '11111111-1111-1111-1111-111111111111',
+      pondId: 'pond-1',
+      status: DeviceStatus.ONLINE,
+      pond: { pondId: 'pond-1', userId: 'user-1' },
+    };
+    const dto: CreateTelemetryDto = {
+      deviceId: device.deviceId,
+      messageId: 'edge-buffering-idempotency-001',
+      dissolvedOxygen: 5.2,
+      isBuffered: true,
+      recordedAt: '2026-11-13T00:00:00.000Z',
+    };
+
+    function mockReceiptTransaction(receiptRows: unknown[]) {
+      const queryBuilder: any = {
+        insert: vi.fn(),
+        into: vi.fn(),
+        values: vi.fn(),
+        orIgnore: vi.fn(),
+        returning: vi.fn(),
+        execute: vi.fn().mockResolvedValue({ raw: receiptRows }),
+      };
+      queryBuilder.insert.mockReturnValue(queryBuilder);
+      queryBuilder.into.mockReturnValue(queryBuilder);
+      queryBuilder.values.mockReturnValue(queryBuilder);
+      queryBuilder.orIgnore.mockReturnValue(queryBuilder);
+      queryBuilder.returning.mockReturnValue(queryBuilder);
+
+      const manager = {
+        createQueryBuilder: vi.fn().mockReturnValue(queryBuilder),
+        create: vi.fn((_entity, data) => data),
+        save: vi.fn().mockResolvedValue({ id: 'telemetry-1', ...dto }),
+        update: vi.fn().mockResolvedValue({ affected: 1 }),
+      };
+      mockDataSource.transaction = vi.fn(async (callback) => callback(manager));
+      return { manager, queryBuilder };
+    }
+
+    it('acknowledges a newly reserved message only after storing its telemetry', async () => {
+      mockDeviceRepo.findOne.mockResolvedValue(device);
+      const { manager, queryBuilder } = mockReceiptTransaction([{ id: 'receipt-1' }]);
+
+      const result = await service.processTelemetryPayloadWithAck(dto);
+
+      expect(result).toEqual(expect.objectContaining({ acknowledged: true, duplicate: false }));
+      expect(queryBuilder.returning).toHaveBeenCalledWith('id');
+      expect(manager.save).toHaveBeenCalledTimes(1);
+      expect(mockRedisService.publish).toHaveBeenCalledWith(
+        'telemetry:new',
+        expect.any(String),
+      );
+    });
+
+    it('returns duplicate without storing or evaluating a retried message', async () => {
+      mockDeviceRepo.findOne.mockResolvedValue(device);
+      const { manager } = mockReceiptTransaction([]);
+
+      const result = await service.processTelemetryPayloadWithAck(dto);
+
+      expect(result).toEqual({ record: null, acknowledged: true, duplicate: true });
+      expect(manager.save).not.toHaveBeenCalled();
+      expect(mockRedisService.publish).not.toHaveBeenCalled();
+      expect(mockThresholdConfigRepo.find).not.toHaveBeenCalled();
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+    });
   });
 
   describe('processTelemetryPayload', () => {
@@ -142,6 +216,26 @@ describe('TelemetryService', () => {
       expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
     });
 
+    it('persists MAINTENANCE telemetry without reviving the device or evaluating rules', async () => {
+      const device = {
+        deviceId: 'maintenance-device',
+        pondId: 'pond-1',
+        status: DeviceStatus.MAINTENANCE,
+      };
+      mockDeviceRepo.findOne.mockResolvedValue(device);
+
+      const result = await service.processTelemetryPayload({
+        deviceId: device.deviceId,
+        dissolvedOxygen: 2.0,
+      });
+
+      expect(result).not.toBeNull();
+      expect(mockTelemetryRepo.save).toHaveBeenCalled();
+      expect(mockDeviceRepo.update).not.toHaveBeenCalled();
+      expect(mockThresholdConfigRepo.find).not.toHaveBeenCalled();
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+    });
+
     it.each([
       ['in-range', 25, 20, 30],
       ['exactly min', 20, 20, 30],
@@ -169,9 +263,9 @@ describe('TelemetryService', () => {
 
       await service.processTelemetryPayload({ deviceId: 'device-1', temperature: value });
 
-      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+      expect(mockRedisService.reserveAlertCooldown).toHaveBeenCalledWith(
         `alert:cooldown:pond-1:device-1:temperature:${direction}`,
-        '1',
+        'WARNING',
         900,
       );
       expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(expect.objectContaining({
@@ -247,7 +341,7 @@ describe('TelemetryService', () => {
       expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
     });
 
-    it('ignores inactive and unsupported waterLevel threshold configurations', async () => {
+    it('ignores inactive temperature config and creates waterLevel CRITICAL alert', async () => {
       mockDeviceRepo.findOne.mockResolvedValue({ deviceId: 'device-1', pondId: 'pond-1' });
       mockThresholdConfigRepo.find.mockResolvedValue([
         { pondId: 'pond-1', metricName: 'temperature', minValue: 20, maxValue: 30, isActive: false },
@@ -256,7 +350,17 @@ describe('TelemetryService', () => {
 
       await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 35, waterLevel: 3 });
 
-      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(1);
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metricName: 'waterLevel',
+          triggeredValue: 3,
+          minValue: 1,
+          maxValue: 2,
+          direction: 'HIGH',
+          alertLevel: 'CRITICAL',
+        }),
+      );
     });
 
     it('supports existing pH, DO and temp stored metric names', async () => {
@@ -329,7 +433,10 @@ describe('TelemetryService', () => {
       const result = await service.processTelemetryPayload({ deviceId: 'device-1', temperature: 19 });
 
       expect(result).not.toBeNull();
-      expect(mockRedisService.del).toHaveBeenCalledWith('alert:cooldown:pond-1:device-1:temperature:LOW');
+      expect(mockRedisService.del).toHaveBeenCalledWith(
+        'alert:cooldown:pond-1:device-1:temperature:LOW',
+        'alert:cooldown:pond-1:device-1:temperature:LOW:level',
+      );
     });
   });
 
@@ -357,9 +464,9 @@ describe('TelemetryService', () => {
 
     it('Scenario 01: Temperature BELOW_MIN triggers WARNING LOW alert', async () => {
       await service.processTelemetryPayload({ deviceId, temperature: 18 });
-      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+      expect(mockRedisService.reserveAlertCooldown).toHaveBeenCalledWith(
         `alert:cooldown:${pondId}:${deviceId}:temperature:LOW`,
-        '1',
+        'WARNING',
         900,
       );
       expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
@@ -375,9 +482,9 @@ describe('TelemetryService', () => {
 
     it('Scenario 02: Temperature ABOVE_MAX triggers WARNING HIGH alert', async () => {
       await service.processTelemetryPayload({ deviceId, temperature: 32 });
-      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+      expect(mockRedisService.reserveAlertCooldown).toHaveBeenCalledWith(
         `alert:cooldown:${pondId}:${deviceId}:temperature:HIGH`,
-        '1',
+        'WARNING',
         900,
       );
       expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
@@ -399,9 +506,9 @@ describe('TelemetryService', () => {
 
     it('Scenario 04: PH BELOW_MIN triggers WARNING LOW alert', async () => {
       await service.processTelemetryPayload({ deviceId, ph: 6.5 });
-      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+      expect(mockRedisService.reserveAlertCooldown).toHaveBeenCalledWith(
         `alert:cooldown:${pondId}:${deviceId}:ph:LOW`,
-        '1',
+        'CRITICAL',
         900,
       );
       expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
@@ -435,9 +542,9 @@ describe('TelemetryService', () => {
 
     it('Scenario 06: Dissolved Oxygen BELOW_MIN triggers WARNING LOW alert', async () => {
       await service.processTelemetryPayload({ deviceId, dissolvedOxygen: 3.5 });
-      expect(mockRedisService.setIfAbsent).toHaveBeenCalledWith(
+      expect(mockRedisService.reserveAlertCooldown).toHaveBeenCalledWith(
         `alert:cooldown:${pondId}:${deviceId}:dissolvedoxygen:LOW`,
-        '1',
+        'WARNING',
         900,
       );
       expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
@@ -709,6 +816,7 @@ describe('TelemetryService', () => {
       expect(result).not.toBeNull();
       expect(mockRedisService.del).toHaveBeenCalledWith(
         `alert:cooldown:${pondId}:${deviceId}:temperature:LOW`,
+        `alert:cooldown:${pondId}:${deviceId}:temperature:LOW:level`,
       );
     });
 
@@ -735,6 +843,63 @@ describe('TelemetryService', () => {
       );
       expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
       expect(mockRedisService.setIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it('classifies DO 4.5 as normal, 4.49 as WARNING, and 3.375 as CRITICAL for an early-warning threshold', async () => {
+      mockThresholdConfigRepo.find.mockResolvedValue([
+        { pondId, metricName: 'DO', minValue: 4.5, maxValue: 8.0, isActive: true },
+      ]);
+      mockRedisService.reserveAlertCooldown
+        .mockResolvedValueOnce('created')
+        .mockResolvedValueOnce('created');
+
+      await service.processTelemetryPayload({ deviceId, dissolvedOxygen: 4.5 });
+      await service.processTelemetryPayload({ deviceId, dissolvedOxygen: 4.49 });
+      await service.processTelemetryPayload({ deviceId, dissolvedOxygen: 3.375 });
+
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(2);
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        triggeredValue: 4.49, alertLevel: 'WARNING',
+      }));
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        triggeredValue: 3.375, alertLevel: 'CRITICAL',
+      }));
+    });
+
+    it('keeps the 900-second cooldown after DO returns NORMAL, so a renewed WARNING is suppressed', async () => {
+      mockThresholdConfigRepo.find.mockResolvedValue([
+        { pondId, metricName: 'DO', minValue: 4.5, maxValue: 8.0, isActive: true },
+      ]);
+      mockRedisService.reserveAlertCooldown
+        .mockResolvedValueOnce('created')
+        .mockResolvedValueOnce('suppressed');
+
+      await service.processTelemetryPayload({ deviceId, dissolvedOxygen: 4.2 });
+      await service.processTelemetryPayload({ deviceId, dissolvedOxygen: 5.0 });
+      await service.processTelemetryPayload({ deviceId, dissolvedOxygen: 4.2 });
+
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(1);
+    });
+
+    it('allows exactly one concurrent CRITICAL escalation after a WARNING', async () => {
+      mockThresholdConfigRepo.find.mockResolvedValue([
+        { pondId, metricName: 'DO', minValue: 4.5, maxValue: 8.0, isActive: true },
+      ]);
+      mockRedisService.reserveAlertCooldown
+        .mockResolvedValueOnce('created')
+        .mockResolvedValueOnce('escalated')
+        .mockResolvedValueOnce('suppressed');
+
+      await service.processTelemetryPayload({ deviceId, dissolvedOxygen: 4.2 });
+      await Promise.all([
+        service.processTelemetryPayload({ deviceId, dissolvedOxygen: 3.0 }),
+        service.processTelemetryPayload({ deviceId, dissolvedOxygen: 3.0 }),
+      ]);
+
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(2);
+      expect(mockAlertsService.createThresholdAlert).toHaveBeenLastCalledWith(expect.objectContaining({
+        alertLevel: 'CRITICAL', triggeredValue: 3.0,
+      }));
     });
 
     it('Scenario 29: Telemetry persistence remains fully functional regardless of alert outcome', async () => {
@@ -872,12 +1037,7 @@ describe('TelemetryService', () => {
       mockThresholdConfigRepo.find.mockResolvedValue([
         { metricName: 'DO', minValue: 4.0, maxValue: 8.0, isActive: true },
       ]);
-      mockRedisService.get = vi.fn().mockImplementation((key) => {
-        if (key.endsWith(':level')) return Promise.resolve('WARNING');
-        return Promise.resolve(null);
-      });
-      mockRedisService.set = vi.fn().mockResolvedValue('OK');
-      mockRedisService.setIfAbsent.mockResolvedValue(false); // Cooldown already exists
+      mockRedisService.reserveAlertCooldown.mockResolvedValue('escalated');
 
       // Gửi DO = 2.0 (nguy cấp, < 3.0 -> CRITICAL)
       await service.processTelemetryPayload({ deviceId: 'device-1', dissolvedOxygen: 2.0 });
@@ -890,5 +1050,65 @@ describe('TelemetryService', () => {
         }),
       );
     });
+  });
+  describe('waterLevel 1.2-1.8m boundary tests', () => {
+    const cases = [
+      { value: 0.89, direction: 'LOW', level: 'CRITICAL' },
+      { value: 1.10, direction: 'LOW', level: 'WARNING' },
+      { value: 1.20, direction: null, level: null },
+      { value: 1.50, direction: null, level: null },
+      { value: 1.80, direction: null, level: null },
+      { value: 1.90, direction: 'HIGH', level: 'WARNING' },
+      { value: 2.25, direction: 'HIGH', level: 'CRITICAL' },
+    ];
+
+    it.each(cases)(
+      'waterLevel=$value => $level $direction',
+      async ({ value, direction, level }) => {
+        const deviceId = 'waterlevel-test-device';
+        const pondId = 'waterlevel-test-pond';
+
+        mockThresholdConfigRepo.find.mockResolvedValue([
+          {
+            pondId,
+            metricName: 'waterLevel',
+            minValue: 1.2,
+            maxValue: 1.8,
+            isActive: true,
+          },
+        ]);
+
+        await service.evaluateThresholds(
+          {
+            deviceId,
+            pondId,
+            status: DeviceStatus.ONLINE,
+          } as any,
+          {
+            deviceId,
+            messageId: `waterlevel-boundary-${value}`,
+            waterLevel: value,
+          },
+        );
+
+        if (direction === null) {
+          expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+        } else {
+          expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledTimes(1);
+          expect(mockAlertsService.createThresholdAlert).toHaveBeenCalledWith(
+            expect.objectContaining({
+              pondId,
+              deviceId,
+              metricName: 'waterLevel',
+              triggeredValue: value,
+              minValue: 1.2,
+              maxValue: 1.8,
+              direction,
+              alertLevel: level,
+            }),
+          );
+        }
+      },
+    );
   });
 });

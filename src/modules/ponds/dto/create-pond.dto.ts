@@ -7,11 +7,13 @@ import {
   IsOptional,
   IsPositive,
   IsString,
-  IsUUID,
+  Matches,
   Length,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PondStatus } from '../../../common/enums/pond-status.enum.js';
+
+const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 export class CreatePondDto {
   @ApiProperty({ description: 'Tên ao nuôi', example: 'Ao Nuôi Số 1 - Khu A' })
@@ -56,11 +58,11 @@ export class CreatePondDto {
 
   @ApiPropertyOptional({ description: 'ID người dùng chủ sở hữu ao (Dành cho Manager)', example: '123e4567-e89b-12d3-a456-426614174000' })
   @IsOptional()
-  @IsUUID('4', { message: 'userId phải là chuỗi UUID v4 hợp lệ!' })
+  @Matches(UUID_REGEX, { message: 'userId phải là chuỗi UUID hợp lệ!' })
   userId?: string;
 
   @ApiPropertyOptional({ description: 'ID trại nuôi chứa ao' })
   @IsOptional()
-  @IsUUID('4', { message: 'farmId phải là chuỗi UUID v4 hợp lệ!' })
+  @Matches(UUID_REGEX, { message: 'farmId phải là chuỗi UUID hợp lệ!' })
   farmId?: string;
 }

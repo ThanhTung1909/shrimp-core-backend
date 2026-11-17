@@ -430,7 +430,88 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
     pondsService = new PondsService(pondRepo, thresholdRepo, manualLogRepo);
     pondsController = new PondsController(pondsService);
 
+    const createDeviceQueryBuilder = () => {
+      let userId: string | undefined;
+      let accessMode: 'FARMER' | 'MANAGER' | undefined;
+      let pondFilter: string | undefined;
+      let statusFilter: string | undefined;
+      let searchFilter: string | undefined;
+      let offset = 0;
+      let pageSize = 10;
+
+      const qb: any = {
+        leftJoinAndSelect: vi.fn(() => qb),
+        innerJoin: vi.fn(() => qb),
+        leftJoin: vi.fn(() => qb),
+        andWhere: vi.fn((sql: string, params: any = {}) => {
+          if (params.currentUserId) {
+            userId = params.currentUserId;
+            accessMode = sql.includes('mFarm.owner_id')
+              ? 'MANAGER' : 'FARMER';
+          }
+          if (params.pondId) pondFilter = params.pondId;
+          if (params.status) statusFilter = params.status;
+          if (params.search) {
+            searchFilter = String(params.search)
+              .replace(/%/g, '').toLowerCase();
+          }
+          return qb;
+        }),
+        orderBy: vi.fn(() => qb),
+        skip: vi.fn((n: number) => {
+          offset = n;
+          return qb;
+        }),
+        take: vi.fn((n: number) => {
+          pageSize = n;
+          return qb;
+        }),
+        getManyAndCount: vi.fn(async () => {
+          const matched = devicesStore.filter((device) => {
+            const pond = device.pond ||
+              pondsStore.find((p) => p.pondId === device.pondId);
+
+            if (userId) {
+              if (!pond) return false;
+              if (accessMode === 'MANAGER') {
+                if (pond.userId !== userId &&
+                    pond.farm?.ownerId !== userId) {
+                  return false;
+                }
+              } else if (pond.userId !== userId) {
+                return false;
+              }
+            }
+
+            if (pondFilter && device.pondId !== pondFilter)
+              return false;
+            if (statusFilter && device.status !== statusFilter)
+              return false;
+            if (searchFilter &&
+                !`${device.deviceName || ''} ${device.macAddress || ''}`
+                  .toLowerCase().includes(searchFilter))
+              return false;
+
+            return true;
+          });
+
+          matched.sort((a, b) =>
+            String(a.deviceName || '').localeCompare(
+              String(b.deviceName || '')
+            )
+          );
+
+          return [
+            matched.slice(offset, offset + pageSize),
+            matched.length
+          ];
+        }),
+      };
+      return qb;
+    };
+
     const deviceRepo: any = {
+      createQueryBuilder: vi.fn(createDeviceQueryBuilder),
       create: vi.fn((dto) => ({ deviceId: 'dev-' + Math.random(), ...dto })),
       save: vi.fn(async (d) => {
         const idx = devicesStore.findIndex((x) => x.deviceId === d.deviceId);
@@ -453,7 +534,34 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       }),
     };
 
-    devicesService = new DevicesService(deviceRepo, pondRepo);
+    const farmRepo: any = {
+      findOneBy: vi.fn(async (where) => {
+        if (where?.farmId === 'farm-flow-b') {
+          return {
+            farmId: 'farm-flow-b',
+            ownerId: MANAGER_ID,
+          };
+        }
+        return null;
+      }),
+    };
+
+    const assignmentRepo: any = {
+      exist: vi.fn(async () => false),
+    };
+
+    const alertRepo: any = {
+      delete: vi.fn(async () => ({ affected: 0 })),
+      update: vi.fn(async () => ({ affected: 0 })),
+    };
+
+    devicesService = new DevicesService(
+      deviceRepo,
+      pondRepo,
+      farmRepo,
+      assignmentRepo,
+      alertRepo,
+    );
     devicesController = new DevicesController(devicesService);
   });
 
@@ -1052,7 +1160,7 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       const userId = 'farmer-dev-1';
       pondsStore.push({ pondId, userId, pondName: 'Ao Thiet Bi 1' });
 
-      const res = await devicesController.createDevice(userId, Role.FARMER, {
+      const res = await devicesController.createDevice(userId, Role.ADMIN, {
         macAddress: 'AA:BB:CC:11:22:33',
         deviceName: 'Tram Do Node 1',
         pondId,
@@ -1076,7 +1184,7 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       });
 
       await expect(
-        devicesController.createDevice(userId, Role.FARMER, {
+        devicesController.createDevice(userId, Role.ADMIN, {
           macAddress: 'DUPLICATE:MAC:01',
           deviceName: 'Tram 2',
           pondId,
@@ -1109,7 +1217,7 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
         status: DeviceStatus.OFFLINE,
       });
 
-      const res = await devicesController.updateDevice(devId, userId, Role.FARMER, {
+      const res = await devicesController.updateDevice(devId, userId, Role.ADMIN, {
         deviceName: 'New Node Name',
         status: DeviceStatus.ONLINE,
       });
@@ -1126,7 +1234,7 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       pondsStore.push(pond);
       devicesStore.push({ deviceId: devId, pondId: pond.pondId, pond, deviceName: 'To Delete Dev' });
 
-      const res = await devicesController.deleteDevice(devId, userId, Role.FARMER);
+      const res = await devicesController.deleteDevice(devId, userId, Role.ADMIN);
       expect(res.message).toBeDefined();
       expect(devicesStore.some((d) => d.deviceId === devId)).toBe(false);
     });
@@ -1225,8 +1333,9 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
       const workerId = (createdUser.user as any).userId;
 
       // 2. Worker has a pond
-      const pondRes = await pondsController.createPond(workerId, Role.FARMER, {
+      const pondRes = await pondsController.createPond(MANAGER_ID, Role.MANAGER, {
         pondName: 'Ao Ky Thuat 1',
+        farmId: 'farm-flow-b',
         areaM2: 3000,
         depthM: 2.0,
         shrimpDensity: 70,

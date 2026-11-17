@@ -35,5 +35,10 @@ export class FindPondsQueryDto {
   // Quản trị viên có thể lọc theo userId
   @IsOptional()
   @IsUUID('4', { message: 'userId phải là chuỗi UUID v4 hợp lệ!' })
-  userId?: string;
+    userId?: string;
+
+  // Lọc theo trại nuôi
+  @IsOptional()
+  @IsUUID('4', { message: 'farmId phải là chuỗi UUID v4 hợp lệ!' })
+  farmId?: string;
 }

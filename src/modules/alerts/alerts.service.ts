@@ -94,7 +94,7 @@ export class AlertsService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<{ data: Alert[]; total: number }> {
-    const { page = 1, limit = 20, deviceId, isResolved } = query;
+    const { page = 1, limit = 20, pondId, deviceId, isResolved, startDate, endDate } = query;
     const skip = (page - 1) * limit;
 
     const qb = this.alertRepo.createQueryBuilder('alert');
@@ -102,16 +102,37 @@ export class AlertsService {
     qb.leftJoinAndSelect('alert.device', 'device');
 
     if (currentUserRole === Role.FARMER) {
-      qb.andWhere('pond.user_id = :currentUserId', { currentUserId });
+      qb.andWhere(
+        '(pond.user_id = :currentUserId OR EXISTS (SELECT 1 FROM pond_farmer_assignments pfa WHERE pfa.pond_id = pond.pond_id AND pfa.farmer_id = :currentUserId))',
+        { currentUserId },
+      );
+    } else if (currentUserRole === Role.MANAGER) {
+      qb.leftJoin('farms', 'farm', 'farm.farm_id = pond.farm_id');
+      qb.andWhere(
+        '(pond.user_id = :currentUserId OR farm.owner_id = :currentUserId)',
+        { currentUserId },
+      );
+    }
+
+    if (pondId) {
+      qb.andWhere('alert.pond_id = :pondId', { pondId });
     }
 
     if (deviceId) {
-      qb.andWhere('alert.deviceId = :deviceId', { deviceId });
+      qb.andWhere('alert.device_id = :deviceId', { deviceId });
     }
 
     if (isResolved !== undefined) {
       const status = isResolved ? AlertStatus.RESOLVED : AlertStatus.ACTIVE;
       qb.andWhere('alert.status = :status', { status });
+    }
+
+    if (startDate) {
+      qb.andWhere('alert.createdAt >= :startDate', { startDate: new Date(startDate) });
+    }
+
+    if (endDate) {
+      qb.andWhere('alert.createdAt <= :endDate', { endDate: new Date(endDate) });
     }
 
     qb.orderBy('alert.createdAt', 'DESC');
@@ -136,8 +157,32 @@ export class AlertsService {
       throw new NotFoundException(`Không tìm thấy cảnh báo với ID: ${alertId}`);
     }
 
-    if (currentUserRole === Role.FARMER && alert.pond.userId !== userId) {
-      throw new ForbiddenException('Bạn không có quyền xử lý cảnh báo này!');
+    if (currentUserRole === Role.FARMER) {
+      const isOwner = alert.pond?.userId === userId;
+      let isAssigned = isOwner;
+      if (!isAssigned && alert.pond?.pondId) {
+        const assignmentCount = await this.alertRepo.manager.query(
+          'SELECT 1 FROM pond_farmer_assignments WHERE pond_id = $1 AND farmer_id = $2 LIMIT 1',
+          [alert.pond.pondId, userId],
+        );
+        isAssigned = assignmentCount && assignmentCount.length > 0;
+      }
+      if (!isAssigned) {
+        throw new ForbiddenException('Bạn không có quyền xử lý cảnh báo này!');
+      }
+    } else if (currentUserRole === Role.MANAGER) {
+      const isOwner = alert.pond?.userId === userId;
+      let hasAccess = isOwner;
+      if (!hasAccess && alert.pond?.farmId) {
+        const farmCount = await this.alertRepo.manager.query(
+          'SELECT 1 FROM farms WHERE farm_id = $1 AND owner_id = $2 LIMIT 1',
+          [alert.pond.farmId, userId],
+        );
+        hasAccess = farmCount && farmCount.length > 0;
+      }
+      if (!hasAccess) {
+        throw new ForbiddenException('Bạn không có quyền xử lý cảnh báo này!');
+      }
     }
 
     alert.status = AlertStatus.RESOLVED;

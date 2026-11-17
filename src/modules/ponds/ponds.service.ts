@@ -38,6 +38,25 @@ import {
   ThresholdResponse,
 } from './dto/pond-response.dto.js';
 
+export const METRIC_DISPLAY_NAMES: Record<string, string> = {
+  dissolvedOxygen: 'Oxy hòa tan (DO)',
+  DO: 'Oxy hòa tan (DO)',
+  temperature: 'Nhiệt độ nước',
+  temp: 'Nhiệt độ nước',
+  pH: 'Độ pH',
+  ph: 'Độ pH',
+  salinity: 'Độ mặn',
+  turbidity: 'Độ đục',
+  waterLevel: 'Mực nước ao',
+  water_level: 'Mực nước ao',
+  nh3: 'Khí độc NH3',
+  no2: 'Khí độc NO2',
+};
+
+export const getMetricDisplayName = (name: string): string => {
+  return METRIC_DISPLAY_NAMES[name] || name;
+};
+
 @Injectable()
 export class PondsService {
   constructor(
@@ -74,9 +93,13 @@ export class PondsService {
   ): Promise<void> {
     if (currentUserRole === Role.ADMIN) return;
     if (currentUserRole === Role.MANAGER) {
-      if (pond.userId !== currentUserId && this.assignmentRepo)
-        throw new ForbiddenException('Bạn không có quyền truy cập ao nuôi này!');
-      return;
+      if (!this.farmRepo) return;
+      if (pond.userId === currentUserId) return;
+      if (pond.farmId) {
+        const farm = await this.farmRepo.findOneBy({ farmId: pond.farmId });
+        if (farm && farm.ownerId === currentUserId) return;
+      }
+      throw new ForbiddenException('Bạn không có quyền truy cập ao nuôi này!');
     }
     if (
       currentUserRole !== Role.FARMER ||
@@ -95,10 +118,21 @@ export class PondsService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<void> {
-    if (this.assignmentRepo && currentUserRole !== Role.ADMIN &&
-      (currentUserRole !== Role.MANAGER || pond.userId !== currentUserId)) {
-      throw new ForbiddenException('Chỉ chủ ao mới có quyền quản lý ao nuôi này!');
+    if (currentUserRole === Role.ADMIN) return;
+    if (!this.farmRepo) {
+      if (currentUserRole === Role.MANAGER || pond.userId === currentUserId) return;
+      throw new ForbiddenException('Chỉ ADMIN hoặc MANAGER mới có quyền quản lý ao nuôi này!');
     }
+    if (currentUserRole === Role.MANAGER) {
+      if (pond.farmId) {
+        const farm = await this.farmRepo.findOneBy({ farmId: pond.farmId });
+        if (farm && farm.ownerId === currentUserId) return;
+      }
+      throw new ForbiddenException(
+        'Quản lý chỉ có quyền quản lý các ao nuôi trong các trang trại do mình quản lý!',
+      );
+    }
+    throw new ForbiddenException('Chỉ ADMIN hoặc MANAGER mới có quyền quản lý ao nuôi này!');
   }
 
   /**
@@ -124,12 +158,24 @@ export class PondsService {
     return safeUser as T;
   }
 
-  private sanitizePond(pond: Pond): Pond {
-    if (!pond.user) return pond;
-    return {
+  private sanitizePond(pond: Pond, currentUserRole?: Role): Pond {
+    const result: Record<string, unknown> = {
       ...pond,
-      user: this.withoutSensitiveUserFields(pond.user as unknown as Record<string, unknown>),
-    } as unknown as Pond;
+      ...(pond.user
+        ? { user: this.withoutSensitiveUserFields(pond.user as unknown as Record<string, unknown>) }
+        : {}),
+    };
+    if (this.assignmentRepo && currentUserRole === Role.FARMER) {
+      delete result.farmerAssignments;
+    } else if (Array.isArray(pond.farmerAssignments)) {
+      result.farmerAssignments = pond.farmerAssignments.map((a) => ({
+        ...a,
+        ...(a.farmer
+          ? { farmer: this.withoutSensitiveUserFields(a.farmer as unknown as Record<string, unknown>) }
+          : {}),
+      }));
+    }
+    return result as unknown as Pond;
   }
 
   private sanitizeManualLog(log: ManualTestLog): ManualTestLog {
@@ -164,7 +210,19 @@ export class PondsService {
       ? createPondDto.userId
       : currentUserId;
 
-    if (createPondDto.farmId) {
+    if (this.farmRepo && currentUserRole === Role.MANAGER) {
+      if (!createPondDto.farmId) {
+        throw new ForbiddenException(
+          'Quản lý chỉ được tạo ao nuôi trong các trang trại do mình quản lý!',
+        );
+      }
+      const farm = await this.farmRepo.findOneBy({ farmId: createPondDto.farmId });
+      if (!farm || farm.ownerId !== currentUserId) {
+        throw new ForbiddenException(
+          'Quản lý chỉ được tạo ao nuôi trong các trang trại do mình quản lý!',
+        );
+      }
+    } else if (this.farmRepo && createPondDto.farmId) {
       const farm = await this.farmRepo.findOneBy({ farmId: createPondDto.farmId });
       if (!farm) throw new NotFoundException('Không tìm thấy trại nuôi');
       if (farm.ownerId !== targetUserId) throw new BadRequestException('Ao nuôi phải thuộc cùng chủ sở hữu với trại nuôi');
@@ -183,7 +241,7 @@ export class PondsService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<PaginatedResponse<Pond>> {
-    const { page = 1, limit = 10, search, status, userId } = query;
+    const { page = 1, limit = 10, search, status, userId, farmId } = query;
     const skip = (page - 1) * limit;
 
     if (currentUserRole === Role.FARMER && this.assignmentRepo) {
@@ -195,10 +253,28 @@ export class PondsService {
         .leftJoinAndSelect('pond.user', 'user')
         .leftJoinAndSelect('pond.devices', 'devices')
         .leftJoinAndSelect('pond.thresholdConfigs', 'thresholdConfigs');
-      if (search) qb.andWhere('pond.pond_name ILIKE :search', { search: `%${search}%` });
+      if (search) qb.andWhere('pond.pondName ILIKE :search', { search: `%${search}%` });
       if (status) qb.andWhere('pond.status = :status', { status });
-      const [data, total] = await qb.orderBy('pond.created_at', 'DESC').skip(skip).take(limit).getManyAndCount();
-      return { data: data.map((pond) => this.sanitizePond(pond)), total, page, limit, totalPages: Math.ceil(total / limit) };
+      if (farmId) qb.andWhere('pond.farmId = :farmId', { farmId });
+      const [data, total] = await qb.orderBy('pond.createdAt', 'DESC').skip(skip).take(limit).getManyAndCount();
+      return { data: data.map((pond) => this.sanitizePond(pond, currentUserRole)), total, page, limit, totalPages: Math.ceil(total / limit) };
+    }
+
+    if (currentUserRole === Role.MANAGER && this.assignmentRepo) {
+      const qb = this.pondRepo
+        .createQueryBuilder('pond')
+        .innerJoin('pond.farm', 'farm')
+        .leftJoinAndSelect('pond.user', 'user')
+        .leftJoinAndSelect('pond.devices', 'devices')
+        .leftJoinAndSelect('pond.thresholdConfigs', 'thresholdConfigs')
+        .leftJoinAndSelect('pond.farmerAssignments', 'farmerAssignments')
+        .leftJoinAndSelect('farmerAssignments.farmer', 'farmer')
+        .andWhere('farm.owner_id = :currentUserId', { currentUserId });
+      if (search) qb.andWhere('pond.pondName ILIKE :search', { search: `%${search}%` });
+      if (status) qb.andWhere('pond.status = :status', { status });
+      if (farmId) qb.andWhere('pond.farmId = :farmId', { farmId });
+      const [data, total] = await qb.orderBy('pond.createdAt', 'DESC').skip(skip).take(limit).getManyAndCount();
+      return { data: data.map((pond) => this.sanitizePond(pond, currentUserRole)), total, page, limit, totalPages: Math.ceil(total / limit) };
     }
 
     const effectiveUserId = currentUserRole === Role.MANAGER && this.assignmentRepo ? currentUserId
@@ -211,12 +287,14 @@ export class PondsService {
         {
           pondName: ILike(`%${search}%`),
           ...(status ? { status } : {}),
+          ...(farmId ? { farmId } : {}),
           ...(effectiveUserId ? { userId: effectiveUserId } : {}),
         },
       ];
     } else {
       where = {
         ...(status ? { status } : {}),
+        ...(farmId ? { farmId } : {}),
         ...(effectiveUserId ? { userId: effectiveUserId } : {}),
       };
     }
@@ -227,6 +305,7 @@ export class PondsService {
         user: true,
         devices: true,
         thresholdConfigs: true,
+        farmerAssignments: this.assignmentRepo ? { farmer: true } : true,
       },
       order: { createdAt: 'DESC' },
       skip,
@@ -234,7 +313,7 @@ export class PondsService {
     });
 
     return {
-      data: data.map((pond) => this.sanitizePond(pond)),
+      data: data.map((pond) => this.sanitizePond(pond, currentUserRole)),
       total,
       page,
       limit,
@@ -254,6 +333,7 @@ export class PondsService {
         devices: true,
         thresholdConfigs: true,
         manualLogs: true,
+        farmerAssignments: this.assignmentRepo ? { farmer: true } : true,
       },
     });
 
@@ -263,7 +343,7 @@ export class PondsService {
 
     await this.assertPondAccess(pond, currentUserId, currentUserRole);
 
-    return this.sanitizePond(pond);
+    return this.sanitizePond(pond, currentUserRole);
   }
 
   async updatePond(
@@ -319,11 +399,25 @@ export class PondsService {
     }
     if (updatePondDto.farmId !== undefined) {
       if (updatePondDto.farmId === null) {
+        if (currentUserRole === Role.MANAGER) {
+          throw new ForbiddenException('Quản lý không được gỡ ao nuôi ra khỏi trang trại!');
+        }
         pond.farmId = null;
       } else {
         const farm = await this.farmRepo.findOneBy({ farmId: updatePondDto.farmId });
         if (!farm) throw new NotFoundException('Không tìm thấy trại nuôi');
-        if (farm.ownerId !== pond.userId) throw new BadRequestException('Ao nuôi phải thuộc cùng chủ sở hữu với trại nuôi');
+        if (currentUserRole === Role.MANAGER && farm.ownerId !== currentUserId) {
+          throw new ForbiddenException(
+            'Quản lý chỉ được chuyển ao nuôi sang các trang trại do mình quản lý!',
+          );
+        }
+        const farmManagerId = farm.ownerId;
+        if (currentUserRole === Role.ADMIN && !farmManagerId) {
+          throw new BadRequestException('Không thể chuyển ao nuôi vào trại chưa được phân công Manager');
+        }
+        if (currentUserRole === Role.ADMIN && farmManagerId !== pond.userId) {
+          pond.userId = farmManagerId!;
+        }
         pond.farmId = farm.farmId;
       }
     }
@@ -364,8 +458,9 @@ export class PondsService {
     });
 
     if (existingConfig) {
+      const metricLabel = getMetricDisplayName(dto.metricName);
       throw new ConflictException(
-        `Cấu hình ngưỡng cho thông số "${dto.metricName}" đã tồn tại trong ao nuôi này!`,
+        `Cấu hình ngưỡng cho thông số "${metricLabel}" đã tồn tại trong ao nuôi này!`,
       );
     }
 
@@ -422,7 +517,7 @@ export class PondsService {
         ...c,
         id: c.configId,
         parameterId: c.metricName,
-        parameterName: c.metricName,
+        parameterName: METRIC_DISPLAY_NAMES[c.metricName] ?? c.metricName,
         unit: meta.unit,
         color: meta.color,
         normalMin,
@@ -643,12 +738,30 @@ export class PondsService {
       throw new ForbiddenException('Chỉ ADMIN hoặc MANAGER mới có quyền phân công FARMER');
     const pond = await this.findPondById(pondId, currentUserId, currentUserRole);
     await this.assertPondManager(pond, currentUserId, currentUserRole);
+
+    // Strict scoping: Quản lý chỉ được gán các ao nuôi trong các trang trại do mình quản lý
+    if (currentUserRole === Role.MANAGER) {
+      if (!pond.farmId) {
+        throw new ForbiddenException(
+          'Quản lý chỉ được gán các ao nuôi trong các trang trại do mình quản lý cho các farmer!',
+        );
+      }
+      const farm = await this.farmRepo.findOneBy({ farmId: pond.farmId });
+      if (!farm || farm.ownerId !== currentUserId) {
+        throw new ForbiddenException(
+          'Quản lý chỉ được gán các ao nuôi trong các trang trại do mình quản lý cho các farmer!',
+        );
+      }
+    }
+
     if (!this.userRepo || !this.assignmentRepo)
       throw new ForbiddenException('Dịch vụ phân công FARMER chưa sẵn sàng');
     const farmer = await this.userRepo.findOneBy({ userId: farmerId });
     if (!farmer) throw new NotFoundException('Không tìm thấy FARMER');
-    if (farmer.role !== Role.FARMER)
-      throw new BadRequestException('Chỉ có thể phân công người dùng có vai trò FARMER');
+    if (farmer.role !== Role.FARMER && farmer.role !== Role.MANAGER)
+      throw new BadRequestException('Chỉ có thể phân công người dùng có vai trò Nông dân hoặc Quản lý');
+    if (currentUserRole === Role.MANAGER && farmer.role !== Role.FARMER)
+      throw new ForbiddenException('Quản lý chỉ có quyền phân công ao nuôi cho Nông dân (FARMER)!');
     if (await this.assignmentRepo.exist({ where: { pondId, farmerId } }))
       throw new ConflictException('FARMER đã được phân công cho ao nuôi này');
     return this.assignmentRepo.save(this.assignmentRepo.create({ pondId, farmerId }));
@@ -661,14 +774,34 @@ export class PondsService {
     currentUserRole: Role,
   ): Promise<MessageOnlyResponse> {
     if (currentUserRole !== Role.ADMIN && currentUserRole !== Role.MANAGER)
-      throw new ForbiddenException('Chỉ ADMIN hoặc MANAGER mới có quyền thu hồi phân công FARMER');
+      throw new ForbiddenException('Chỉ ADMIN hoặc MANAGER mới có quyền thu hồi phân công');
     const pond = await this.findPondById(pondId, currentUserId, currentUserRole);
     await this.assertPondManager(pond, currentUserId, currentUserRole);
+
+    // Strict scoping: Quản lý chỉ được thu hồi phân công các ao nuôi trong các trang trại do mình quản lý
+    if (currentUserRole === Role.MANAGER) {
+      if (!pond.farmId) {
+        throw new ForbiddenException(
+          'Quản lý chỉ được thu hồi ao nuôi trong các trang trại do mình quản lý!',
+        );
+      }
+      const farm = await this.farmRepo.findOneBy({ farmId: pond.farmId });
+      if (!farm || farm.ownerId !== currentUserId) {
+        throw new ForbiddenException(
+          'Quản lý chỉ được thu hồi ao nuôi trong các trang trại do mình quản lý!',
+        );
+      }
+    }
+
     if (!this.assignmentRepo)
-      throw new ForbiddenException('Dịch vụ phân công FARMER chưa sẵn sàng');
+      throw new ForbiddenException('Dịch vụ phân công chưa sẵn sàng');
     const assignment = await this.assignmentRepo.findOneBy({ pondId, farmerId });
-    if (!assignment) throw new NotFoundException('Không tìm thấy phân công FARMER cho ao nuôi này');
-    await this.assignmentRepo.remove(assignment);
-    return { message: 'Thu hồi phân công FARMER thành công!' };
+    if (assignment) {
+      await this.assignmentRepo.remove(assignment);
+    }
+    if (pond.userId === farmerId) {
+      await this.pondRepo.update(pondId, { userId: currentUserId });
+    }
+    return { message: 'Thu hồi phân công ao nuôi thành công!' };
   }
 }

@@ -8,6 +8,8 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from './entities/user.entity.js';
+import { Pond } from '../ponds/entities/pond.entity.js';
+import { PondFarmerAssignment } from '../ponds/entities/pond-farmer-assignment.entity.js';
 import { EntityManager, FindOptionsWhere, ILike, Not, Repository } from 'typeorm';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { AdminUpdateUserDto } from './dto/admin-update-user.dto.js';
@@ -24,7 +26,47 @@ export class UsersService {
     private readonly usersRepository: Repository<User>,
     @Optional()
     private readonly loginLockoutService?: LoginLockoutService,
+    @Optional()
+    @InjectRepository(Pond)
+    private readonly pondRepository?: Repository<Pond>,
+    @Optional()
+    @InjectRepository(PondFarmerAssignment)
+    private readonly assignmentRepository?: Repository<PondFarmerAssignment>,
   ) {}
+
+  private async managerOwnsPond(managerId: string, pondId: string): Promise<boolean> {
+    if (!this.pondRepository) {
+      throw new ForbiddenException('Không thể xác minh phạm vi trang trại của MANAGER!');
+    }
+    return this.pondRepository
+      .createQueryBuilder('pond')
+      .innerJoin('pond.farm', 'farm')
+      .where('pond.pondId = :pondId', { pondId })
+      .andWhere('farm.ownerId = :managerId', { managerId })
+      .getExists();
+  }
+
+  /** Managers may operate only on users attached to farms they own. */
+  async assertManagerCanManageUser(managerId: string, target: User): Promise<void> {
+    if (target.role === Role.ADMIN) {
+      throw new ForbiddenException('MANAGER không được thay đổi tài khoản ADMIN!');
+    }
+    if (!this.pondRepository) {
+      throw new ForbiddenException('Không thể xác minh phạm vi trang trại của MANAGER!');
+    }
+    const hasScope = await this.pondRepository
+      .createQueryBuilder('pond')
+      .innerJoin('pond.farm', 'farm')
+      .leftJoin('pond.farmerAssignments', 'assignment')
+      .where('farm.ownerId = :managerId', { managerId })
+      .andWhere('(pond.userId = :targetId OR assignment.farmerId = :targetId)', {
+        targetId: target.userId,
+      })
+      .getExists();
+    if (!hasScope) {
+      throw new ForbiddenException('MANAGER chỉ được quản lý người dùng trong các trang trại do mình phụ trách!');
+    }
+  }
 
   async assertManagementAuthority(actorId: string, targetId?: string, requestedRole?: Role): Promise<Role> {
     if (!actorId || !this.loginLockoutService) {
@@ -42,9 +84,10 @@ export class UsersService {
       }
       if (targetId) {
         const target = await this.findById(targetId);
-        if (target?.role === Role.ADMIN) {
-          throw new ForbiddenException('MANAGER không được thay đổi tài khoản ADMIN!');
+        if (!target) {
+          throw new NotFoundException('Không tìm thấy người dùng!');
         }
+        await this.assertManagerCanManageUser(actor.userId, target);
       }
     }
     return actor.role;
@@ -82,8 +125,8 @@ export class UsersService {
         if (!target) {
           throw new NotFoundException('Không tìm thấy người dùng!');
         }
-        if (actor.role === Role.MANAGER && target.role === Role.ADMIN) {
-          throw new ForbiddenException('MANAGER không được mở khóa ADMIN!');
+        if (actor.role === Role.MANAGER) {
+          await this.assertManagerCanManageUser(actor.userId, target);
         }
         if (target.isLocked) {
           await manager.update(User, { userId: targetId }, {
@@ -162,7 +205,7 @@ export class UsersService {
   }
 
   // Lấy danh sách tất cả người dùng (hỗ trợ tìm kiếm, lọc theo vai trò, phân trang)
-  async findAll(query: FindUsersQueryDto): Promise<{
+  async findAll(query: FindUsersQueryDto, actorId?: string, actorRole?: Role): Promise<{
     data: Omit<User, 'passwordHash'>[];
     total: number;
     page: number;
@@ -171,6 +214,45 @@ export class UsersService {
   }> {
     const { page = 1, limit = 10, search, role } = query;
     const skip = (page - 1) * limit;
+
+    if (actorRole === Role.MANAGER) {
+      if (!actorId || !this.pondRepository) {
+        throw new ForbiddenException('Không thể xác minh phạm vi trang trại của MANAGER!');
+      }
+      const qb = this.usersRepository
+        .createQueryBuilder('account')
+        .where('account.role != :adminRole', { adminRole: Role.ADMIN })
+        .andWhere(
+          `EXISTS (
+            SELECT 1
+            FROM pond scoped_pond
+            INNER JOIN farms scoped_farm ON scoped_farm.farm_id = scoped_pond.farm_id
+            LEFT JOIN pond_farmer_assignments scoped_assignment ON scoped_assignment.pond_id = scoped_pond.pond_id
+            WHERE scoped_farm.owner_id = :actorId
+              AND (scoped_pond.user_id = account.user_id OR scoped_assignment.farmer_id = account.user_id)
+          )`,
+          { actorId },
+        );
+      if (search) {
+        qb.andWhere(
+          '(account.fullName ILIKE :search OR account.phoneNumber ILIKE :search OR account.email ILIKE :search)',
+          { search: `%${search}%` },
+        );
+      }
+      if (role) qb.andWhere('account.role = :role', { role });
+      const [users, total] = await qb
+        .orderBy('account.fullName', 'ASC')
+        .skip(skip)
+        .take(limit)
+        .getManyAndCount();
+      return {
+        data: users.map((u) => this.sanitizeUser(u)),
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      };
+    }
 
     let where: FindOptionsWhere<User>[] | FindOptionsWhere<User> = {};
 
@@ -273,9 +355,18 @@ export class UsersService {
     dto: CreateUserDto,
     actorId?: string,
   ): Promise<Omit<User, 'passwordHash'>> {
-    if (actorId) {
-      await this.assertManagementAuthority(actorId, undefined, dto.role);
-    } else if (dto.role === Role.ADMIN) {
+    const actorRole = actorId
+      ? await this.assertManagementAuthority(actorId, undefined, dto.role)
+      : undefined;
+    if (actorRole === Role.MANAGER) {
+      const requestedRole = dto.role ?? Role.FARMER;
+      if (requestedRole !== Role.FARMER) {
+        throw new ForbiddenException('MANAGER chỉ được tạo tài khoản FARMER trong trang trại của mình!');
+      }
+      if (!dto.pondId || !this.assignmentRepository || !(await this.managerOwnsPond(actorId!, dto.pondId))) {
+        throw new ForbiddenException('MANAGER phải chọn một ao nuôi thuộc trang trại mình phụ trách khi tạo FARMER!');
+      }
+    } else if (!actorId && dto.role === Role.ADMIN) {
       throw new ForbiddenException('Thiếu quyền cấp tài khoản ADMIN!');
     }
     const existing = await this.findByPhoneNumber(dto.phoneNumber);
@@ -300,12 +391,20 @@ export class UsersService {
       email: dto.email || null,
       gender: dto.gender || null,
       dateOfBirth: dto.dateOfBirth || null,
-      role: dto.role,
+      role: dto.role ?? Role.FARMER,
       mustChangePassword: dto.mustChangePassword ?? false,
     });
 
     try {
       const savedUser = await this.usersRepository.save(newUser);
+      if (actorRole === Role.MANAGER && dto.pondId) {
+        await this.assignmentRepository!.save(
+          this.assignmentRepository!.create({
+            pondId: dto.pondId,
+            farmerId: savedUser.userId,
+          }),
+        );
+      }
       return this.sanitizeUser(savedUser);
     } catch (error: any) {
       if (error?.code === '23505') {

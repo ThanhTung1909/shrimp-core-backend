@@ -15,6 +15,7 @@ describe('P0-3 management authority cannot bypass manual unlock hierarchy', () =
   let target: User;
   let repo: any;
   let lockout: any;
+  let pondRepo: any;
   let users: UsersService;
   let store: Map<string, User>;
 
@@ -63,7 +64,15 @@ describe('P0-3 management authority cannot bypass manual unlock hierarchy', () =
       getState: vi.fn(async () => ({ attempts: 0, tempTtl: 0, pendingManual: false })),
       withUsersLock: vi.fn(), resetLoginFailureState: vi.fn(),
     };
-    users = new UsersService(repo, lockout);
+    const query = {
+      innerJoin: vi.fn(), leftJoin: vi.fn(), where: vi.fn(), andWhere: vi.fn(),
+      getExists: vi.fn(async () => true),
+    };
+    Object.values(query).forEach((method: any) => {
+      if (typeof method === 'function' && method !== query.getExists) method.mockReturnValue(query);
+    });
+    pondRepo = { createQueryBuilder: vi.fn(() => query) };
+    users = new UsersService(repo, lockout, pondRepo);
   });
 
   const create = (role: Role) => users.createUserByAdmin({
@@ -124,6 +133,12 @@ describe('P0-3 management authority cannot bypass manual unlock hierarchy', () =
     expect(criteria.role.type).toBe('not');
     expect(criteria.role.value).toBe(Role.ADMIN);
     expect(store.has(targetId)).toBe(false);
+  });
+
+  it('MANAGER cannot manage a FARMER outside farms they own', async () => {
+    pondRepo.createQueryBuilder().getExists.mockResolvedValueOnce(false);
+    await expect(users.deleteUser(targetId, actorId)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(repo.delete).not.toHaveBeenCalled();
   });
 
   it('returns Forbidden and preserves the row if a delete target becomes ADMIN after authorization', async () => {
