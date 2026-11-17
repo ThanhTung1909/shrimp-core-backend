@@ -32,3 +32,6 @@ tsconfig.build.tsbuildinfo
 
 # Local project documentation
 /docs/
+
+# Local AI agent instructions
+/AGENTS.md
