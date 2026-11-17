@@ -29,3 +29,6 @@
 !.vscode/extensions.json
 
 tsconfig.build.tsbuildinfo
+
+# Local project documentation
+/docs/
