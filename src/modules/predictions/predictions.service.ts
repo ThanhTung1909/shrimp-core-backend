@@ -1,4 +1,10 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -7,6 +13,12 @@ import { Pond } from '../ponds/entities/pond.entity.js';
 import { PondStatus } from '../../common/enums/pond-status.enum.js';
 import { RiskLevel } from '../../common/enums/risk-level.enum.js';
 import { TelemetryService } from '../telemetry/telemetry.service.js';
+import { PondsService } from '../ponds/ponds.service.js';
+import { Role } from '../../common/enums/role.enum.js';
+import {
+  buildAiPredictionRequest,
+  mapAiPredictionResponse,
+} from './contracts/ai-prediction.mapper.js';
 
 @Injectable()
 export class PredictionsService {
@@ -19,6 +31,8 @@ export class PredictionsService {
     private readonly pondRepo: Repository<Pond>,
     private readonly configService: ConfigService,
     private readonly telemetryService?: TelemetryService,
+    @Optional()
+    private readonly pondsService?: PondsService,
   ) {}
 
   /**
@@ -39,11 +53,12 @@ export class PredictionsService {
    * 3. Gọi AI Model Service ngoại vi hoặc sử dụng mô hình nội bộ để tính toán DO, pH, Risk
    * 4. Lưu bản ghi kết quả vào bảng ai_prediction
    */
-  async predictForPond(pondId: string): Promise<AiPrediction> {
-    const pond = await this.pondRepo.findOne({
-      where: { pondId },
-      relations: ['devices'],
-    });
+  async predictForPond(
+    pondId: string,
+    actorUserId?: string,
+    actorRole?: Role,
+  ): Promise<AiPrediction> {
+    const pond = await this.findPondForPrediction(pondId, actorUserId, actorRole);
 
     if (!pond) {
       throw new NotFoundException(`Không tìm thấy ao nuôi với ID: ${pondId}`);
@@ -53,14 +68,24 @@ export class PredictionsService {
     let currentDO = 5.5;
     let currentPH = 7.8;
     let currentTemp = 28.0;
+    let salinity: number | undefined;
+    let turbidity: number | undefined;
 
     if (pond.devices && pond.devices.length > 0 && this.telemetryService) {
       for (const dev of pond.devices) {
         const latestTelemetry = await this.telemetryService.getLatestByDeviceId(dev.deviceId);
         if (latestTelemetry) {
-          if (latestTelemetry.dissolvedOxygen !== null) currentDO = Number(latestTelemetry.dissolvedOxygen);
-          if (latestTelemetry.ph !== null) currentPH = Number(latestTelemetry.ph);
-          if (latestTelemetry.temperature !== null) currentTemp = Number(latestTelemetry.temperature);
+          const dissolvedOxygen = asFiniteNumber(latestTelemetry.dissolvedOxygen);
+          const ph = asFiniteNumber(latestTelemetry.ph);
+          const temperature = asFiniteNumber(latestTelemetry.temperature);
+          const latestSalinity = asFiniteNumber(latestTelemetry.salinity);
+          const latestTurbidity = asFiniteNumber(latestTelemetry.turbidity);
+
+          if (dissolvedOxygen !== undefined) currentDO = dissolvedOxygen;
+          if (ph !== undefined) currentPH = ph;
+          if (temperature !== undefined) currentTemp = temperature;
+          salinity = latestSalinity;
+          turbidity = latestTurbidity;
           break;
         }
       }
@@ -74,7 +99,17 @@ export class PredictionsService {
 
     // Thử gọi AI Microservice nếu có cấu hình (kèm Timeout 10s để không làm treo worker)
     let externalAiSuccess = false;
-    if (aiApiUrl) {
+    const aiRequest = buildAiPredictionRequest({
+      pondId,
+      currentDO,
+      currentPH,
+      currentTemp,
+      timestamp: new Date().toISOString(),
+      salinity,
+      turbidity,
+    });
+
+    if (aiApiUrl && aiRequest.ok) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000);
 
@@ -82,29 +117,36 @@ export class PredictionsService {
         const response = await fetch(aiApiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            pondId,
-            currentDO,
-            currentPH,
-            currentTemp,
-            timestamp: new Date().toISOString(),
-          }),
+          body: JSON.stringify(aiRequest.value),
           signal: controller.signal,
         });
         if (response.ok) {
-          const result = await response.json();
-          predictedDO = Number(result.predictedDO ?? currentDO);
-          predictedPH = Number(result.predictedPH ?? currentPH);
-          riskScore = Number(result.riskScore ?? 0.1);
-          riskLevel = (result.riskLevel as RiskLevel) || this.computeRiskLevel(riskScore, predictedDO, predictedPH);
-          externalAiSuccess = true;
-          this.logger.log(`[AI Prediction] Nhận kết quả từ AI Microservice cho ao ${pondId}`);
+          const mapped = mapAiPredictionResponse(await response.json());
+          if (mapped.ok) {
+            predictedDO = mapped.value.predictedDO;
+            predictedPH = mapped.value.predictedPH;
+            riskScore = mapped.value.riskScore;
+            riskLevel = mapped.value.riskLevel;
+            externalAiSuccess = true;
+            this.logger.log(`[AI Prediction] Nhận kết quả hợp lệ từ AI Microservice cho ao ${pondId}`);
+          } else {
+            this.logger.warn(`[AI Prediction Contract Warning] Phản hồi AI không hợp lệ cho ao ${pondId}: ${mapped.reason}. Sử dụng mô hình ước tính tích hợp.`);
+          }
+        } else {
+          this.logger.warn(`[AI Prediction Transport Warning] AI Microservice trả HTTP ${response.status} cho ao ${pondId}. Sử dụng mô hình ước tính tích hợp.`);
         }
       } catch (err: any) {
-        this.logger.warn(`[AI Prediction Warning] Không thể kết nối AI Microservice: ${err.message}. Sử dụng mô hình ước tính tích hợp.`);
+        const category = err?.name === 'AbortError'
+          ? 'Timeout'
+          : 'Transport';
+        this.logger.warn(`[AI Prediction ${category} Warning] Không thể lấy dự báo AI cho ao ${pondId}: ${err?.message ?? 'unknown error'}. Sử dụng mô hình ước tính tích hợp.`);
       } finally {
         clearTimeout(timeoutId);
       }
+    } else if (aiApiUrl && !aiRequest.ok) {
+      this.logger.warn(
+        `[AI Prediction Request Warning] Không gọi AI cho ao ${pondId}: ${aiRequest.reason}. Sử dụng mô hình ước tính tích hợp.`,
+      );
     }
 
     // Nếu không có external service hoặc gọi thất bại, sử dụng mô hình dự báo tích hợp
@@ -159,7 +201,12 @@ export class PredictionsService {
   /**
    * Lấy bản ghi dự báo mới nhất của một ao nuôi
    */
-  async getLatestPrediction(pondId: string): Promise<AiPrediction | null> {
+  async getLatestPrediction(
+    pondId: string,
+    actorUserId?: string,
+    actorRole?: Role,
+  ): Promise<AiPrediction | null> {
+    await this.assertPredictionReadAccess(pondId, actorUserId, actorRole);
     return this.predictionRepo.findOne({
       where: { pondId },
       order: { predictedTime: 'DESC' },
@@ -169,11 +216,58 @@ export class PredictionsService {
   /**
    * Lấy lịch sử dự báo của một ao nuôi
    */
-  async getPredictionHistory(pondId: string, limit = 20): Promise<AiPrediction[]> {
+  async getPredictionHistory(
+    pondId: string,
+    limit = 20,
+    actorUserId?: string,
+    actorRole?: Role,
+  ): Promise<AiPrediction[]> {
+    await this.assertPredictionReadAccess(pondId, actorUserId, actorRole);
     return this.predictionRepo.find({
       where: { pondId },
       order: { predictedTime: 'DESC' },
       take: limit,
     });
   }
+
+  private async findPondForPrediction(
+    pondId: string,
+    actorUserId?: string,
+    actorRole?: Role,
+  ): Promise<Pond> {
+    if (actorUserId && actorRole) {
+      if (!this.pondsService) {
+        throw new ServiceUnavailableException('Dịch vụ phân quyền ao nuôi chưa sẵn sàng');
+      }
+      return this.pondsService.findPondById(pondId, actorUserId, actorRole);
+    }
+
+    const pond = await this.pondRepo.findOne({
+      where: { pondId },
+      relations: ['devices'],
+    });
+    if (!pond) {
+      throw new NotFoundException(`Không tìm thấy ao nuôi với ID: ${pondId}`);
+    }
+    return pond;
+  }
+
+  private async assertPredictionReadAccess(
+    pondId: string,
+    actorUserId?: string,
+    actorRole?: Role,
+  ): Promise<void> {
+    if (actorUserId && actorRole) {
+      if (!this.pondsService) {
+        throw new ServiceUnavailableException('Dịch vụ phân quyền ao nuôi chưa sẵn sàng');
+      }
+      await this.pondsService.findPondById(pondId, actorUserId, actorRole);
+    }
+  }
+}
+
+function asFiniteNumber(value: unknown): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  const numeric = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
 }

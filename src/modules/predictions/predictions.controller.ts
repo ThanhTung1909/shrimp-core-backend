@@ -14,6 +14,7 @@ import { PredictionSchedulerService } from './prediction-scheduler.service.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../../common/guards/roles.guard.js';
 import { Roles } from '../../common/decorators/roles.decorator.js';
+import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { Role } from '../../common/enums/role.enum.js';
 import { AiPrediction } from './entities/ai-prediction.entity.js';
 
@@ -33,8 +34,10 @@ export class PredictionsController {
   @ApiResponse({ status: 404, description: 'Chưa có dữ liệu dự báo cho ao nuôi này' })
   async getLatestPrediction(
     @Param('pondId', ParseUUIDPipe) pondId: string,
+    @CurrentUser('userId') userId: string,
+    @CurrentUser('role') role: Role,
   ): Promise<AiPrediction> {
-    const latest = await this.predictionsService.getLatestPrediction(pondId);
+    const latest = await this.predictionsService.getLatestPrediction(pondId, userId, role);
     if (!latest) {
       throw new NotFoundException(`Chưa có dữ liệu dự báo cho ao nuôi ID: ${pondId}`);
     }
@@ -47,8 +50,10 @@ export class PredictionsController {
   async getPredictionHistory(
     @Param('pondId', ParseUUIDPipe) pondId: string,
     @Query('limit') limit = 20,
+    @CurrentUser('userId') userId: string,
+    @CurrentUser('role') role: Role,
   ): Promise<AiPrediction[]> {
-    return this.predictionsService.getPredictionHistory(pondId, Number(limit) || 20);
+    return this.predictionsService.getPredictionHistory(pondId, Number(limit) || 20, userId, role);
   }
 
   @Roles(Role.ADMIN, Role.MANAGER)
@@ -57,8 +62,10 @@ export class PredictionsController {
   @ApiResponse({ status: 201, description: 'Dự báo thành công' })
   async triggerPondPrediction(
     @Param('pondId', ParseUUIDPipe) pondId: string,
+    @CurrentUser('userId') userId: string,
+    @CurrentUser('role') role: Role,
   ): Promise<AiPrediction> {
-    return this.predictionsService.predictForPond(pondId);
+    return this.predictionsService.predictForPond(pondId, userId, role);
   }
 
   @Roles(Role.ADMIN, Role.MANAGER)

@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { ConfigService } from '@nestjs/config';
 import {
   QUEUE_PREDICTIONS,
   PREDICTION_JOBS,
@@ -13,10 +14,21 @@ export class PredictionSchedulerService implements OnModuleInit {
   constructor(
     @InjectQueue(QUEUE_PREDICTIONS)
     private readonly predictionQueue: Queue,
+    private readonly configService: ConfigService,
   ) {}
 
   async onModuleInit() {
+    if (!this.backgroundJobsEnabled()) {
+      this.logger.log('[Scheduler] Job dự báo nền đã được tắt bằng cấu hình runtime.');
+      return;
+    }
     await this.setupPeriodicPredictionsJob();
+  }
+
+  private backgroundJobsEnabled(): boolean {
+    return (this.configService.get<string>('BACKGROUND_JOBS_ENABLED') ?? 'true')
+      .trim()
+      .toLowerCase() !== 'false';
   }
 
   /**
@@ -59,6 +71,10 @@ export class PredictionSchedulerService implements OnModuleInit {
    * Cho phép trigger tính toán dự báo ngay lập tức (dùng khi kiểm thử hoặc kích hoạt thủ công)
    */
   async triggerActivePondsNow() {
+    if (!this.backgroundJobsEnabled()) {
+      this.logger.warn('[Scheduler] Bỏ qua yêu cầu chạy dự báo nền vì BACKGROUND_JOBS_ENABLED=false.');
+      return null;
+    }
     this.logger.log('[Scheduler] Kích hoạt thủ công tính toán AI cho các ao active...');
     return this.predictionQueue.add(
       PREDICTION_JOBS.CRON_ACTIVE_PONDS,
