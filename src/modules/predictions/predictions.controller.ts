@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { PredictionsService } from './predictions.service.js';
 import { PredictionSchedulerService } from './prediction-scheduler.service.js';
@@ -60,12 +61,16 @@ export class PredictionsController {
   @Post('pond/:pondId/trigger')
   @ApiOperation({ summary: 'Kích hoạt ngay tác vụ dự báo AI cho một ao nuôi cụ thể' })
   @ApiResponse({ status: 201, description: 'Dự báo thành công' })
+  @ApiResponse({ status: 503, description: 'Telemetry thiếu, không hợp lệ hoặc đã quá hạn cho dự báo' })
   async triggerPondPrediction(
     @Param('pondId', ParseUUIDPipe) pondId: string,
     @CurrentUser('userId') userId: string,
     @CurrentUser('role') role: Role,
   ): Promise<AiPrediction> {
-    return this.predictionsService.predictForPond(pondId, userId, role);
+    return this.predictionsService.predictForPond(pondId, userId, role, {
+      triggerSource: 'manual-pond-trigger',
+      correlationId: randomUUID(),
+    });
   }
 
   @Roles(Role.ADMIN, Role.MANAGER)

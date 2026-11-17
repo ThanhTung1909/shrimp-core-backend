@@ -1,11 +1,11 @@
 /**
- * Opt-in PostgreSQL acceptance evidence for AQS-101.
+ * Bằng chứng nghiệm thu PostgreSQL có opt-in cho AQS-101.
  *
- * This suite never uses the ordinary configured database. It creates and then
- * drops one exact, local fixture database only when both opt-in environment
- * variables are supplied. A test-only HTTP server exercises the real fetch,
- * mapper, TypeORM entity and PostgreSQL persistence path without changing the
- * FastAPI approval state or emitting operational alerts.
+ * Suite này không bao giờ dùng database cấu hình thông thường. Nó chỉ tạo rồi
+ * xóa đúng một fixture database cục bộ khi có đủ các biến môi trường opt-in.
+ * HTTP server chỉ dành cho test kiểm tra fetch, mapper, TypeORM entity và luồng
+ * PostgreSQL persistence thực tế mà không thay đổi approval state FastAPI hoặc
+ * phát cảnh báo vận hành.
  */
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -39,6 +39,7 @@ import { TelemetryIngestReceipt } from '../src/modules/telemetry/entities/teleme
 import { User } from '../src/modules/users/entities/user.entity.js';
 
 const TEST_DATABASE = 'shrimp_aqs101_prediction_e2e';
+const SAFE_FIXTURE_TELEMETRY_AGE_MS = 1_000;
 const realFastApiUrl = process.env.AQS101_REAL_FASTAPI_URL;
 const runAcceptanceE2e =
   process.env.AQS101_POSTGRES_INTEGRATION === 'true'
@@ -118,6 +119,10 @@ databaseDescribe('AQS-101 PostgreSQL prediction persistence acceptance', () => {
       temperature: 28.5,
       salinity: 15,
       turbidity: 20,
+      // PredictionsService chụp mốc thời gian tham chiếu trước khi await fixture.
+      // Giữ số đo test tổng hợp lùi nhẹ về quá khứ để race cùng mili-giây không
+      // bị thể hiện sai thành telemetry timestamp tương lai trong production.
+      recordedAt: new Date(Date.now() - SAFE_FIXTURE_TELEMETRY_AGE_MS),
     }),
   };
 

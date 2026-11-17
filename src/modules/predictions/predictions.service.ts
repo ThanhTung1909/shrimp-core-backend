@@ -5,6 +5,7 @@ import {
   Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -19,6 +20,12 @@ import {
   buildAiPredictionRequest,
   mapAiPredictionResponse,
 } from './contracts/ai-prediction.mapper.js';
+
+export interface PredictionExecutionContext {
+  triggerSource: 'manual-pond-trigger' | 'scheduled' | 'manual-active' | 'direct';
+  correlationId?: string;
+  jobId?: string;
+}
 
 @Injectable()
 export class PredictionsService {
@@ -57,6 +64,7 @@ export class PredictionsService {
     pondId: string,
     actorUserId?: string,
     actorRole?: Role,
+    executionContext: PredictionExecutionContext = { triggerSource: 'direct' },
   ): Promise<AiPrediction> {
     const pond = await this.findPondForPrediction(pondId, actorUserId, actorRole);
 
@@ -64,32 +72,9 @@ export class PredictionsService {
       throw new NotFoundException(`Không tìm thấy ao nuôi với ID: ${pondId}`);
     }
 
-    // Lấy số liệu cảm biến mới nhất từ thiết bị của ao (nếu có)
-    let currentDO = 5.5;
-    let currentPH = 7.8;
-    let currentTemp = 28.0;
-    let salinity: number | undefined;
-    let turbidity: number | undefined;
-
-    if (pond.devices && pond.devices.length > 0 && this.telemetryService) {
-      for (const dev of pond.devices) {
-        const latestTelemetry = await this.telemetryService.getLatestByDeviceId(dev.deviceId);
-        if (latestTelemetry) {
-          const dissolvedOxygen = asFiniteNumber(latestTelemetry.dissolvedOxygen);
-          const ph = asFiniteNumber(latestTelemetry.ph);
-          const temperature = asFiniteNumber(latestTelemetry.temperature);
-          const latestSalinity = asFiniteNumber(latestTelemetry.salinity);
-          const latestTurbidity = asFiniteNumber(latestTelemetry.turbidity);
-
-          if (dissolvedOxygen !== undefined) currentDO = dissolvedOxygen;
-          if (ph !== undefined) currentPH = ph;
-          if (temperature !== undefined) currentTemp = temperature;
-          salinity = latestSalinity;
-          turbidity = latestTurbidity;
-          break;
-        }
-      }
-    }
+    const correlationId = executionContext.correlationId ?? randomUUID();
+    const telemetry = await this.getFreshTelemetryForPrediction(pondId, pond.devices ?? [], correlationId);
+    const { currentDO, currentPH, currentTemp, salinity, turbidity, recordedAt } = telemetry;
 
     const aiApiUrl = this.configService.get<string>('AI_PREDICTION_API_URL');
     let predictedDO = currentDO;
@@ -104,7 +89,7 @@ export class PredictionsService {
       currentDO,
       currentPH,
       currentTemp,
-      timestamp: new Date().toISOString(),
+      timestamp: recordedAt.toISOString(),
       salinity,
       turbidity,
     });
@@ -116,7 +101,10 @@ export class PredictionsService {
       try {
         const response = await fetch(aiApiUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Request-ID': correlationId,
+          },
           body: JSON.stringify(aiRequest.value),
           signal: controller.signal,
         });
@@ -128,25 +116,25 @@ export class PredictionsService {
             riskScore = mapped.value.riskScore;
             riskLevel = mapped.value.riskLevel;
             externalAiSuccess = true;
-            this.logger.log(`[AI Prediction] Nhận kết quả hợp lệ từ AI Microservice cho ao ${pondId}`);
+            this.logger.log(JSON.stringify({ event: 'ai_prediction_response', pondId, correlationId, source: executionContext.triggerSource, jobId: executionContext.jobId, outcome: 'ai_success' }));
           } else {
             this.logger.warn(`[AI Prediction Contract Warning] Phản hồi AI không hợp lệ cho ao ${pondId}: ${mapped.reason}. Sử dụng mô hình ước tính tích hợp.`);
           }
         } else {
-          this.logger.warn(`[AI Prediction Transport Warning] AI Microservice trả HTTP ${response.status} cho ao ${pondId}. Sử dụng mô hình ước tính tích hợp.`);
+          this.logger.warn(JSON.stringify({ event: 'ai_prediction_response', pondId, correlationId, source: executionContext.triggerSource, jobId: executionContext.jobId, outcome: 'fallback_http_non_success', status: response.status }));
         }
       } catch (err: any) {
         const category = err?.name === 'AbortError'
           ? 'Timeout'
           : 'Transport';
-        this.logger.warn(`[AI Prediction ${category} Warning] Không thể lấy dự báo AI cho ao ${pondId}: ${err?.message ?? 'unknown error'}. Sử dụng mô hình ước tính tích hợp.`);
+        this.logger.warn(JSON.stringify({ event: 'ai_prediction_response', pondId, correlationId, source: executionContext.triggerSource, jobId: executionContext.jobId, outcome: `fallback_${category.toLowerCase()}` }));
       } finally {
         clearTimeout(timeoutId);
       }
     } else if (aiApiUrl && !aiRequest.ok) {
-      this.logger.warn(
-        `[AI Prediction Request Warning] Không gọi AI cho ao ${pondId}: ${aiRequest.reason}. Sử dụng mô hình ước tính tích hợp.`,
-      );
+      // Nhánh phòng vệ: getFreshTelemetryForPrediction đã kiểm tra đầy đủ
+      // contract trước khi thực hiện bất kỳ lệnh gọi bên ngoài nào.
+      throw new ServiceUnavailableException(`Dữ liệu telemetry cho ao ${pondId} không hợp lệ để dự báo: ${aiRequest.reason}`);
     }
 
     // Nếu không có external service hoặc gọi thất bại, sử dụng mô hình dự báo tích hợp
@@ -181,9 +169,7 @@ export class PredictionsService {
     });
 
     const savedPrediction = await this.predictionRepo.save(predictionRecord);
-    this.logger.log(
-      `[AI Prediction] Đã lưu bản ghi dự báo cho ao ${pondId}: DO=${predictedDO}, pH=${predictedPH}, RiskScore=${riskScore}, RiskLevel=${riskLevel}, Source=${predictionRecord.predictionSource}`,
-    );
+    this.logger.log(JSON.stringify({ event: 'prediction_persisted', pondId, correlationId, source: executionContext.triggerSource, jobId: executionContext.jobId, predictionSource: predictionRecord.predictionSource, isFallback: predictionRecord.isFallback, telemetryRecordedAt: recordedAt.toISOString() }));
 
     return savedPrediction;
   }
@@ -196,6 +182,76 @@ export class PredictionsService {
       return RiskLevel.MEDIUM;
     }
     return RiskLevel.LOW;
+  }
+
+  private async getFreshTelemetryForPrediction(
+    pondId: string,
+    devices: Array<{ deviceId: string }>,
+    correlationId: string,
+  ): Promise<{
+    currentDO: number;
+    currentPH: number;
+    currentTemp: number;
+    salinity: number;
+    turbidity: number;
+    recordedAt: Date;
+  }> {
+    if (!this.telemetryService || devices.length === 0) {
+      throw new ServiceUnavailableException(`Không có telemetry khả dụng cho ao ${pondId}; không tạo dự báo từ giá trị mặc định.`);
+    }
+
+    const maxAgeMinutes = this.getPredictionTelemetryMaxAgeMinutes();
+    const now = Date.now();
+    const candidates = await Promise.all(devices.map(async (device) => {
+      const telemetry = await this.telemetryService!.getLatestByDeviceId(device.deviceId);
+      if (!telemetry) return null;
+      const recordedAt = telemetry.recordedAt instanceof Date
+        ? telemetry.recordedAt
+        : new Date(telemetry.recordedAt);
+      if (!Number.isFinite(recordedAt.getTime())) return null;
+      return { telemetry, recordedAt };
+    }));
+    const latest = candidates
+      .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
+      .sort((left, right) => right.recordedAt.getTime() - left.recordedAt.getTime())[0];
+
+    if (!latest) {
+      throw new ServiceUnavailableException(`Không có timestamp telemetry hợp lệ cho ao ${pondId}; không tạo dự báo từ giá trị mặc định.`);
+    }
+
+    const ageMs = now - latest.recordedAt.getTime();
+    if (ageMs < 0 || ageMs > maxAgeMinutes * 60_000) {
+      this.logger.warn(JSON.stringify({ event: 'prediction_skipped_stale_telemetry', pondId, correlationId, telemetryRecordedAt: latest.recordedAt.toISOString(), ageMs, maxAgeMinutes }));
+      throw new ServiceUnavailableException(`Telemetry của ao ${pondId} không còn mới để dự báo.`);
+    }
+
+    const currentDO = asFiniteNumber(latest.telemetry.dissolvedOxygen);
+    const currentPH = asFiniteNumber(latest.telemetry.ph);
+    const currentTemp = asFiniteNumber(latest.telemetry.temperature);
+    const salinity = asFiniteNumber(latest.telemetry.salinity);
+    const turbidity = asFiniteNumber(latest.telemetry.turbidity);
+    const requestCheck = buildAiPredictionRequest({
+      pondId,
+      currentDO,
+      currentPH,
+      currentTemp,
+      salinity,
+      turbidity,
+      timestamp: latest.recordedAt.toISOString(),
+    });
+    if (!requestCheck.ok) {
+      this.logger.warn(JSON.stringify({ event: 'prediction_skipped_invalid_telemetry', pondId, correlationId, reason: requestCheck.reason }));
+      throw new ServiceUnavailableException(`Telemetry của ao ${pondId} không đủ hợp lệ để dự báo.`);
+    }
+    return { ...requestCheck.value, recordedAt: latest.recordedAt };
+  }
+
+  private getPredictionTelemetryMaxAgeMinutes(): number {
+    const configured = this.configService.get<string>('PREDICTION_TELEMETRY_MAX_AGE_MINUTES')
+      ?? this.configService.get<string>('DEVICE_STALE_TIMEOUT_MINUTES')
+      ?? '15';
+    const value = Number(configured);
+    return Number.isFinite(value) && value > 0 ? value : 15;
   }
 
   /**
