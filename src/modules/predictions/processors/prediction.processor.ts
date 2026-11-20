@@ -1,5 +1,5 @@
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
-import { Logger } from '@nestjs/common';
+import { HttpException, Logger } from '@nestjs/common';
 import { Job, Queue } from 'bullmq';
 import { InjectQueue } from '@nestjs/bullmq';
 import {
@@ -37,7 +37,23 @@ export class PredictionQueueProcessor extends WorkerHost {
         if (!pondId) {
           throw new Error('Thiếu pondId để thực hiện dự báo');
         }
-        return await this.predictionsService.predictForPond(pondId);
+        try {
+          return await this.predictionsService.predictForPond(pondId);
+        } catch (error) {
+          if (isTelemetryUnavailable(error)) {
+            // Missing, stale or invalid telemetry is not a transient worker
+            // failure.  Mark this run as intentionally skipped so BullMQ does
+            // not retry it and accidentally create a prediction later from a
+            // different, unreviewed sample.
+            job.discard();
+            const detail = error.getResponse() as { errorCode?: string };
+            this.logger.warn(
+              `[Prediction Worker] Bỏ qua ao ${pondId}: ${detail.errorCode ?? 'PREDICTION_TELEMETRY_UNAVAILABLE'}`,
+            );
+            return { skipped: true, reason: detail.errorCode ?? 'PREDICTION_TELEMETRY_UNAVAILABLE' };
+          }
+          throw error;
+        }
       }
 
       case PREDICTION_JOBS.CRON_ACTIVE_PONDS: {
@@ -97,4 +113,14 @@ export class PredictionQueueProcessor extends WorkerHost {
       `[Prediction Worker Failed] Job ${job.id} (${job.name}) thất bại: ${error.message}`,
     );
   }
+}
+
+function isTelemetryUnavailable(error: unknown): error is HttpException {
+  if (!(error instanceof HttpException)) return false;
+  const response = error.getResponse();
+  return typeof response === 'object'
+    && response !== null
+    && 'errorCode' in response
+    && typeof (response as { errorCode?: unknown }).errorCode === 'string'
+    && (response as { errorCode: string }).errorCode.startsWith('PREDICTION_TELEMETRY_');
 }

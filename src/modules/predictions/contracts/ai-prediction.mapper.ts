@@ -9,13 +9,24 @@ import { RiskLevel } from '../../../common/enums/risk-level.enum.js';
  */
 export interface AiPredictionRequest {
   pondId: string;
-  currentDO: number;
-  currentPH: number;
-  currentTemp: number;
+  /** FastAPI develop vocabulary: temperature in degrees Celsius. */
+  temperature: number;
+  /** FastAPI develop vocabulary: pH. */
+  ph: number;
+  /** FastAPI develop vocabulary: dissolved oxygen in mg/L. */
+  dissolvedOxygen: number;
   timestamp: string;
   salinity: number;
   turbidity: number;
 }
+
+/**
+ * Version of the one-way adapter from Core telemetry to the FastAPI develop
+ * /api/predict contract.  Keep the version out of the JSON payload: FastAPI
+ * has no such field and Pydantic must not silently ignore a duplicate schema.
+ */
+export const AI_PREDICTION_CONTRACT_VERSION = 'ai-develop-v1' as const;
+export type AiPredictionContractVersion = typeof AI_PREDICTION_CONTRACT_VERSION;
 
 /** Values collected by Core before they are admitted to the FastAPI contract. */
 export interface AiPredictionRequestInput {
@@ -59,7 +70,13 @@ const RISK_LEVEL_MAP: Record<string, RiskLevel> = {
  * heuristic fallback before making an avoidable HTTP request that would be
  * rejected with 422.
  */
-export function buildAiPredictionRequest(input: AiPredictionRequestInput): AiPredictionRequestBuildResult {
+export function buildAiPredictionRequest(
+  input: AiPredictionRequestInput,
+  contractVersion: string = AI_PREDICTION_CONTRACT_VERSION,
+): AiPredictionRequestBuildResult {
+  if (contractVersion !== AI_PREDICTION_CONTRACT_VERSION) {
+    return { ok: false, reason: `unsupported AI prediction contract version: ${contractVersion}` };
+  }
   if (typeof input.pondId !== 'string' || !isUuid(input.pondId)) {
     return { ok: false, reason: 'pondId must be a UUID' };
   }
@@ -67,7 +84,7 @@ export function buildAiPredictionRequest(input: AiPredictionRequestInput): AiPre
     return { ok: false, reason: 'timestamp must be a valid ISO-8601 value with timezone' };
   }
 
-  const fields: Array<[keyof Omit<AiPredictionRequest, 'pondId' | 'timestamp'>, unknown, number, number]> = [
+  const fields: Array<[keyof AiPredictionRequestInput, unknown, number, number]> = [
     ['currentDO', input.currentDO, 0, 15],
     ['currentPH', input.currentPH, 5.5, 10],
     ['currentTemp', input.currentTemp, 15, 42],
@@ -85,9 +102,9 @@ export function buildAiPredictionRequest(input: AiPredictionRequestInput): AiPre
     ok: true,
     value: {
       pondId: input.pondId,
-      currentDO: input.currentDO as number,
-      currentPH: input.currentPH as number,
-      currentTemp: input.currentTemp as number,
+      temperature: input.currentTemp as number,
+      ph: input.currentPH as number,
+      dissolvedOxygen: input.currentDO as number,
       timestamp: input.timestamp,
       salinity: input.salinity as number,
       turbidity: input.turbidity as number,
