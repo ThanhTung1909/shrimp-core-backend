@@ -17,6 +17,7 @@ import { TelemetryService } from '../telemetry/telemetry.service.js';
 import { PondsService } from '../ponds/ponds.service.js';
 import { Role } from '../../common/enums/role.enum.js';
 import {
+  AI_PREDICTION_CONTRACT_VERSION,
   buildAiPredictionRequest,
   mapAiPredictionResponse,
 } from './contracts/ai-prediction.mapper.js';
@@ -26,6 +27,30 @@ export interface PredictionExecutionContext {
   correlationId?: string;
   jobId?: string;
 }
+
+type PredictionTelemetry = {
+  dissolvedOxygen: number;
+  ph: number;
+  temperature: number;
+  salinity: number;
+  turbidity: number;
+  recordedAt: Date;
+};
+
+type UnknownTelemetrySample = {
+  recordedAt: unknown;
+  dissolvedOxygen: unknown;
+  ph: unknown;
+  temperature: unknown;
+  salinity: unknown;
+  turbidity: unknown;
+};
+
+type PredictionTelemetryErrorCode =
+  | 'PREDICTION_TELEMETRY_MISSING'
+  | 'PREDICTION_TELEMETRY_INVALID'
+  | 'PREDICTION_TELEMETRY_STALE'
+  | 'PREDICTION_TELEMETRY_FUTURE';
 
 @Injectable()
 export class PredictionsService {
@@ -73,8 +98,14 @@ export class PredictionsService {
     }
 
     const correlationId = executionContext.correlationId ?? randomUUID();
-    const telemetry = await this.getFreshTelemetryForPrediction(pondId, pond.devices ?? [], correlationId);
-    const { currentDO, currentPH, currentTemp, salinity, turbidity, recordedAt } = telemetry;
+    // Một dự báo phải dựa trên một mẫu cảm biến hoàn chỉnh, còn mới; không
+    // thay bằng giá trị danh nghĩa để biến telemetry thiếu thành kết quả giả.
+    const telemetry = await this.getFreshPredictionTelemetry(pond);
+    const currentDO = telemetry.dissolvedOxygen;
+    const currentPH = telemetry.ph;
+    const currentTemp = telemetry.temperature;
+    const salinity = telemetry.salinity;
+    const turbidity = telemetry.turbidity;
 
     const aiApiUrl = this.configService.get<string>('AI_PREDICTION_API_URL');
     let predictedDO = currentDO;
@@ -84,17 +115,27 @@ export class PredictionsService {
 
     // Thử gọi AI Microservice nếu có cấu hình (kèm Timeout 10s để không làm treo worker)
     let externalAiSuccess = false;
+    const contractVersion = this.configService.get<string>('AI_PREDICTION_CONTRACT_VERSION')
+      ?? AI_PREDICTION_CONTRACT_VERSION;
     const aiRequest = buildAiPredictionRequest({
       pondId,
       currentDO,
       currentPH,
       currentTemp,
-      timestamp: recordedAt.toISOString(),
+      timestamp: telemetry.recordedAt.toISOString(),
       salinity,
       turbidity,
-    });
+    }, contractVersion);
 
-    if (aiApiUrl && aiRequest.ok) {
+    if (!aiRequest.ok) {
+      throw this.predictionUnavailable(
+        'PREDICTION_TELEMETRY_INVALID',
+        `Không thể lập payload dự báo từ telemetry: ${aiRequest.reason}`,
+      );
+    }
+
+    const aiProductionApproved = this.configService.get<string>('AI_PRODUCTION_INFERENCE_APPROVED') === 'true';
+    if (aiApiUrl && aiProductionApproved) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000);
 
@@ -131,10 +172,10 @@ export class PredictionsService {
       } finally {
         clearTimeout(timeoutId);
       }
-    } else if (aiApiUrl && !aiRequest.ok) {
-      // Nhánh phòng vệ: getFreshTelemetryForPrediction đã kiểm tra đầy đủ
-      // contract trước khi thực hiện bất kỳ lệnh gọi bên ngoài nào.
-      throw new ServiceUnavailableException(`Dữ liệu telemetry cho ao ${pondId} không hợp lệ để dự báo: ${aiRequest.reason}`);
+    } else if (aiApiUrl && !aiProductionApproved) {
+      this.logger.warn(
+        `[AI Prediction Blocked] Không gọi AI cho ao ${pondId}: AI_PRODUCTION_INFERENCE_APPROVED chưa được phê duyệt. Sử dụng HEURISTIC_RULE với telemetry hợp lệ.`,
+      );
     }
 
     // Nếu không có external service hoặc gọi thất bại, sử dụng mô hình dự báo tích hợp
@@ -169,7 +210,7 @@ export class PredictionsService {
     });
 
     const savedPrediction = await this.predictionRepo.save(predictionRecord);
-    this.logger.log(JSON.stringify({ event: 'prediction_persisted', pondId, correlationId, source: executionContext.triggerSource, jobId: executionContext.jobId, predictionSource: predictionRecord.predictionSource, isFallback: predictionRecord.isFallback, telemetryRecordedAt: recordedAt.toISOString() }));
+    this.logger.log(JSON.stringify({ event: 'prediction_persisted', pondId, correlationId, source: executionContext.triggerSource, jobId: executionContext.jobId, predictionSource: predictionRecord.predictionSource, isFallback: predictionRecord.isFallback, telemetryRecordedAt: telemetry.recordedAt.toISOString() }));
 
     return savedPrediction;
   }
@@ -184,74 +225,90 @@ export class PredictionsService {
     return RiskLevel.LOW;
   }
 
-  private async getFreshTelemetryForPrediction(
-    pondId: string,
-    devices: Array<{ deviceId: string }>,
-    correlationId: string,
-  ): Promise<{
-    currentDO: number;
-    currentPH: number;
-    currentTemp: number;
-    salinity: number;
-    turbidity: number;
-    recordedAt: Date;
-  }> {
-    if (!this.telemetryService || devices.length === 0) {
-      throw new ServiceUnavailableException(`Không có telemetry khả dụng cho ao ${pondId}; không tạo dự báo từ giá trị mặc định.`);
+  private async getFreshPredictionTelemetry(pond: Pond): Promise<PredictionTelemetry> {
+    if (!this.telemetryService || !pond.devices?.length) {
+      throw this.predictionUnavailable(
+        'PREDICTION_TELEMETRY_MISSING',
+        'Ao nuôi chưa có thiết bị hoặc dịch vụ telemetry chưa sẵn sàng',
+      );
     }
 
-    const maxAgeMinutes = this.getPredictionTelemetryMaxAgeMinutes();
+    const timestampedSamples: Array<{ sample: UnknownTelemetrySample; recordedAt: Date }> = [];
+    let invalidTimestampFound = false;
+
+    for (const device of pond.devices) {
+      const latest = await this.telemetryService.getLatestByDeviceId(device.deviceId);
+      if (!latest) continue;
+
+      const sample = latest as unknown as UnknownTelemetrySample;
+      const recordedAt = toValidDate(sample.recordedAt);
+      if (!recordedAt) {
+        invalidTimestampFound = true;
+        continue;
+      }
+      timestampedSamples.push({ sample, recordedAt });
+    }
+
+    if (!timestampedSamples.length) {
+      throw this.predictionUnavailable(
+        invalidTimestampFound ? 'PREDICTION_TELEMETRY_INVALID' : 'PREDICTION_TELEMETRY_MISSING',
+        invalidTimestampFound
+          ? 'Telemetry không có recordedAt hợp lệ'
+          : 'Không tìm thấy telemetry cho các thiết bị của ao',
+      );
+    }
+
+    timestampedSamples.sort((left, right) => right.recordedAt.getTime() - left.recordedAt.getTime());
+    const latest = timestampedSamples[0];
     const now = Date.now();
-    const candidates = await Promise.all(devices.map(async (device) => {
-      const telemetry = await this.telemetryService!.getLatestByDeviceId(device.deviceId);
-      if (!telemetry) return null;
-      const recordedAt = telemetry.recordedAt instanceof Date
-        ? telemetry.recordedAt
-        : new Date(telemetry.recordedAt);
-      if (!Number.isFinite(recordedAt.getTime())) return null;
-      return { telemetry, recordedAt };
-    }));
-    const latest = candidates
-      .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
-      .sort((left, right) => right.recordedAt.getTime() - left.recordedAt.getTime())[0];
-
-    if (!latest) {
-      throw new ServiceUnavailableException(`Không có timestamp telemetry hợp lệ cho ao ${pondId}; không tạo dự báo từ giá trị mặc định.`);
-    }
-
     const ageMs = now - latest.recordedAt.getTime();
-    if (ageMs < 0 || ageMs > maxAgeMinutes * 60_000) {
-      this.logger.warn(JSON.stringify({ event: 'prediction_skipped_stale_telemetry', pondId, correlationId, telemetryRecordedAt: latest.recordedAt.toISOString(), ageMs, maxAgeMinutes }));
-      throw new ServiceUnavailableException(`Telemetry của ao ${pondId} không còn mới để dự báo.`);
+    if (ageMs < 0) {
+      throw this.predictionUnavailable(
+        'PREDICTION_TELEMETRY_FUTURE',
+        'Telemetry có recordedAt nằm trong tương lai',
+      );
     }
 
-    const currentDO = asFiniteNumber(latest.telemetry.dissolvedOxygen);
-    const currentPH = asFiniteNumber(latest.telemetry.ph);
-    const currentTemp = asFiniteNumber(latest.telemetry.temperature);
-    const salinity = asFiniteNumber(latest.telemetry.salinity);
-    const turbidity = asFiniteNumber(latest.telemetry.turbidity);
-    const requestCheck = buildAiPredictionRequest({
-      pondId,
-      currentDO,
-      currentPH,
-      currentTemp,
-      salinity,
-      turbidity,
-      timestamp: latest.recordedAt.toISOString(),
-    });
-    if (!requestCheck.ok) {
-      this.logger.warn(JSON.stringify({ event: 'prediction_skipped_invalid_telemetry', pondId, correlationId, reason: requestCheck.reason }));
-      throw new ServiceUnavailableException(`Telemetry của ao ${pondId} không đủ hợp lệ để dự báo.`);
+    const maxAgeMs = this.getPredictionTelemetryMaxAgeMinutes() * 60 * 1000;
+    if (ageMs > maxAgeMs) {
+      throw this.predictionUnavailable(
+        'PREDICTION_TELEMETRY_STALE',
+        `Telemetry không còn mới (đã quá thời hạn ${this.getPredictionTelemetryMaxAgeMinutes()} phút)`,
+      );
     }
-    return { ...requestCheck.value, recordedAt: latest.recordedAt };
+
+    const dissolvedOxygen = asFiniteNumber(latest.sample.dissolvedOxygen);
+    const ph = asFiniteNumber(latest.sample.ph);
+    const temperature = asFiniteNumber(latest.sample.temperature);
+    const salinity = asFiniteNumber(latest.sample.salinity);
+    const turbidity = asFiniteNumber(latest.sample.turbidity);
+    if (
+      dissolvedOxygen === undefined
+      || ph === undefined
+      || temperature === undefined
+      || salinity === undefined
+      || turbidity === undefined
+    ) {
+      throw this.predictionUnavailable(
+        'PREDICTION_TELEMETRY_INVALID',
+        'Telemetry phải có dissolvedOxygen, ph, temperature, salinity và turbidity là số hữu hạn',
+      );
+    }
+
+    return { dissolvedOxygen, ph, temperature, salinity, turbidity, recordedAt: latest.recordedAt };
   }
 
   private getPredictionTelemetryMaxAgeMinutes(): number {
-    const configured = this.configService.get<string>('PREDICTION_TELEMETRY_MAX_AGE_MINUTES')
+    const configured = Number(
+      this.configService.get<string>('PREDICTION_TELEMETRY_MAX_AGE_MINUTES')
       ?? this.configService.get<string>('DEVICE_STALE_TIMEOUT_MINUTES')
-      ?? '15';
-    const value = Number(configured);
-    return Number.isFinite(value) && value > 0 ? value : 15;
+      ?? '15',
+    );
+    return Number.isFinite(configured) && configured > 0 ? configured : 15;
+  }
+
+  private predictionUnavailable(code: PredictionTelemetryErrorCode, message: string): ServiceUnavailableException {
+    return new ServiceUnavailableException({ errorCode: code, message });
   }
 
   /**
@@ -323,7 +380,10 @@ export class PredictionsService {
 }
 
 function asFiniteNumber(value: unknown): number | undefined {
-  if (value === null || value === undefined) return undefined;
-  const numeric = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(numeric) ? numeric : undefined;
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function toValidDate(value: unknown): Date | undefined {
+  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) return undefined;
+  return value;
 }

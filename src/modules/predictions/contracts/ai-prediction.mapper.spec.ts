@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RiskLevel } from '../../../common/enums/risk-level.enum.js';
 import {
+  AI_PREDICTION_CONTRACT_VERSION,
   buildAiPredictionRequest,
   mapAiPredictionResponse,
 } from './ai-prediction.mapper.js';
@@ -57,12 +58,47 @@ describe('AI prediction contract mapper', () => {
   });
 
   it('builds the complete request schema expected by FastAPI', () => {
-    expect(buildAiPredictionRequest(validRequest)).toEqual({ ok: true, value: validRequest });
+    expect(buildAiPredictionRequest(validRequest)).toEqual({
+      ok: true,
+      value: {
+        pondId: validRequest.pondId,
+        temperature: validRequest.currentTemp,
+        ph: validRequest.currentPH,
+        dissolvedOxygen: validRequest.currentDO,
+        salinity: validRequest.salinity,
+        turbidity: validRequest.turbidity,
+        timestamp: validRequest.timestamp,
+      },
+    });
   });
 
   it('does not restrict a canonical UUID to legacy UUID versions', () => {
     const uuidV7Request = { ...validRequest, pondId: '018f0a5c-fd55-7f2a-9d33-a8dc439af556' };
-    expect(buildAiPredictionRequest(uuidV7Request)).toEqual({ ok: true, value: uuidV7Request });
+    expect(buildAiPredictionRequest(uuidV7Request)).toMatchObject({
+      ok: true,
+      value: { pondId: uuidV7Request.pondId },
+    });
+  });
+
+  it('uses one explicitly versioned FastAPI develop vocabulary with no compatibility keys', () => {
+    const result = buildAiPredictionRequest(validRequest, AI_PREDICTION_CONTRACT_VERSION);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.value).toEqual(expect.objectContaining({
+      temperature: 28.5,
+      ph: 7.7,
+      dissolvedOxygen: 5.2,
+    }));
+    expect(result.value).not.toHaveProperty('currentDO');
+    expect(result.value).not.toHaveProperty('currentPH');
+    expect(result.value).not.toHaveProperty('currentTemp');
+  });
+
+  it('refuses an unrecognised adapter version before any HTTP request can be made', () => {
+    expect(buildAiPredictionRequest(validRequest, 'unknown-v2')).toEqual({
+      ok: false,
+      reason: 'unsupported AI prediction contract version: unknown-v2',
+    });
   });
 
   it.each([

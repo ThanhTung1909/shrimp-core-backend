@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { ServiceUnavailableException } from '@nestjs/common';
 import { PredictionQueueProcessor } from './prediction.processor.js';
 import { PREDICTION_JOBS } from '../../../common/queues/queue.constants.js';
 
@@ -62,6 +63,24 @@ describe('PredictionQueueProcessor', () => {
 
       await expect(processor.process(mockJob)).rejects.toThrow('Thiếu pondId để thực hiện dự báo');
     });
+
+    it('bỏ qua không retry khi telemetry không đủ điều kiện dự báo', async () => {
+      mockPredictionsService.predictForPond.mockRejectedValueOnce(
+        new ServiceUnavailableException({ errorCode: 'PREDICTION_TELEMETRY_STALE' }),
+      );
+      const mockJob: any = {
+        id: 'pred-job-stale',
+        name: PREDICTION_JOBS.TRIGGER_POND,
+        data: { pondId: 'pond-100' },
+        discard: vi.fn(),
+      };
+
+      await expect(processor.process(mockJob)).resolves.toEqual({
+        skipped: true,
+        reason: 'PREDICTION_TELEMETRY_STALE',
+      });
+      expect(mockJob.discard).toHaveBeenCalledOnce();
+    });
   });
 
   describe('process: cron-active-ponds-prediction', () => {
@@ -110,12 +129,17 @@ describe('PredictionQueueProcessor', () => {
 
   it('discards a deterministic stale-telemetry job instead of retrying it', async () => {
     const { ServiceUnavailableException } = await import('@nestjs/common');
-    mockPredictionsService.predictForPond.mockRejectedValueOnce(new ServiceUnavailableException());
+    mockPredictionsService.predictForPond.mockRejectedValueOnce(
+      new ServiceUnavailableException({ errorCode: 'PREDICTION_TELEMETRY_STALE' }),
+    );
     const mockJob: any = {
       id: 'stale-job-1', name: PREDICTION_JOBS.TRIGGER_POND, data: { pondId: 'pond-100' }, discard: vi.fn(),
     };
 
-    await expect(processor.process(mockJob)).resolves.toEqual({ skipped: true, reason: 'telemetry_unavailable' });
+    await expect(processor.process(mockJob)).resolves.toEqual({
+      skipped: true,
+      reason: 'PREDICTION_TELEMETRY_STALE',
+    });
     expect(mockJob.discard).toHaveBeenCalledOnce();
   });
 });

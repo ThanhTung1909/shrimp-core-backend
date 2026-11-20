@@ -1,5 +1,5 @@
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
-import { Logger, ServiceUnavailableException } from '@nestjs/common';
+import { HttpException, Logger } from '@nestjs/common';
 import { Job, Queue } from 'bullmq';
 import { InjectQueue } from '@nestjs/bullmq';
 import {
@@ -44,10 +44,14 @@ export class PredictionQueueProcessor extends WorkerHost {
             jobId: String(job.id),
           });
         } catch (error) {
-          if (error instanceof ServiceUnavailableException) {
+          if (isTelemetryUnavailable(error)) {
+            // Missing, stale or invalid telemetry is not a transient worker failure.
             job.discard();
-            this.logger.warn(`[Prediction Worker] Bỏ qua job ${job.id}: telemetry không đủ mới hoặc không hợp lệ; không retry.`);
-            return { skipped: true, reason: 'telemetry_unavailable' };
+            const detail = error.getResponse() as { errorCode?: string };
+            this.logger.warn(
+              `[Prediction Worker] Bỏ qua ao ${pondId}: ${detail.errorCode ?? 'PREDICTION_TELEMETRY_UNAVAILABLE'}`,
+            );
+            return { skipped: true, reason: detail.errorCode ?? 'PREDICTION_TELEMETRY_UNAVAILABLE' };
           }
           throw error;
         }
@@ -110,4 +114,14 @@ export class PredictionQueueProcessor extends WorkerHost {
       `[Prediction Worker Failed] Job ${job.id} (${job.name}) thất bại: ${error.message}`,
     );
   }
+}
+
+function isTelemetryUnavailable(error: unknown): error is HttpException {
+  if (!(error instanceof HttpException)) return false;
+  const response = error.getResponse();
+  return typeof response === 'object'
+    && response !== null
+    && 'errorCode' in response
+    && typeof (response as { errorCode?: unknown }).errorCode === 'string'
+    && (response as { errorCode: string }).errorCode.startsWith('PREDICTION_TELEMETRY_');
 }

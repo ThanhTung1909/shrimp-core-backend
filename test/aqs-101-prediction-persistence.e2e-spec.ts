@@ -92,14 +92,6 @@ function isLocalDatabaseHost(host: string | undefined): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
 
-function isLocalHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' && isLocalDatabaseHost(url.hostname);
-  } catch {
-    return false;
-  }
-}
 
 databaseDescribe('AQS-101 PostgreSQL prediction persistence acceptance', () => {
   let dataSource: DataSource;
@@ -130,9 +122,6 @@ databaseDescribe('AQS-101 PostgreSQL prediction persistence acceptance', () => {
     const config = readIsolatedDatabaseConfig();
     if (!isLocalDatabaseHost(config.DB_HOST)) {
       throw new Error('AQS-101 acceptance only permits a local PostgreSQL fixture database.');
-    }
-    if (realFastApiUrl && !isLocalHttpUrl(realFastApiUrl)) {
-      throw new Error('AQS-101 acceptance only permits an explicit local FastAPI URL.');
     }
 
     adminClient = new Client({
@@ -271,7 +260,7 @@ databaseDescribe('AQS-101 PostgreSQL prediction persistence acceptance', () => {
     await adminClient?.end();
   });
 
-  function createService(aiPredictionApiUrl = fixtureUrl): PredictionsService {
+  function createService(aiPredictionApiUrl = fixtureUrl, approval = 'true'): PredictionsService {
     const predictionRepo = dataSource.getRepository(AiPrediction);
     const realPondRepo = dataSource.getRepository(Pond);
     const pondRepo = {
@@ -283,7 +272,12 @@ databaseDescribe('AQS-101 PostgreSQL prediction persistence acceptance', () => {
     return new PredictionsService(
       predictionRepo,
       pondRepo,
-      new ConfigService({ AI_PREDICTION_API_URL: aiPredictionApiUrl }),
+      new ConfigService({
+        AI_PREDICTION_API_URL: aiPredictionApiUrl,
+        AI_PREDICTION_CONTRACT_VERSION: 'ai-develop-v1',
+        AI_PRODUCTION_INFERENCE_APPROVED: approval,
+        PREDICTION_TELEMETRY_MAX_AGE_MINUTES: '15',
+      }),
       telemetry as never,
     );
   }
@@ -304,9 +298,9 @@ databaseDescribe('AQS-101 PostgreSQL prediction persistence acceptance', () => {
     expect(receivedPayloads).toHaveLength(1);
     expect(receivedPayloads[0]).toMatchObject({
       pondId: pond.pondId,
-      currentDO: 5.2,
-      currentPH: 7.7,
-      currentTemp: 28.5,
+      dissolvedOxygen: 5.2,
+      ph: 7.7,
+      temperature: 28.5,
       salinity: 15,
       turbidity: 20,
     });
@@ -389,19 +383,18 @@ databaseDescribe('AQS-101 PostgreSQL prediction persistence acceptance', () => {
     expect(persisted.predictionSource).toBe('HEURISTIC_RULE');
   }, 15_000);
 
-  it.runIf(Boolean(realFastApiUrl))(
-    'persists HEURISTIC_RULE fallback after the real FastAPI approval gate returns 503',
-    async () => {
-      const result = await createService(realFastApiUrl).predictForPond(pond.pondId);
-      const persisted = await dataSource
-        .getRepository(AiPrediction)
-        .findOneByOrFail({ predictionId: result.predictionId });
+  it('persists HEURISTIC_RULE without contacting AI when NestJS inference is not approved', async () => {
+    const result = await createService(fixtureUrl, 'false').predictForPond(pond.pondId);
 
-      expect(persisted.isFallback).toBe(true);
-      expect(persisted.predictionSource).toBe('HEURISTIC_RULE');
-      expect(persisted.riskLevel).toMatch(/^(LOW|MEDIUM|HIGH)$/u);
-      expect(persisted.riskScore).toBeGreaterThanOrEqual(0);
-      expect(persisted.riskScore).toBeLessThanOrEqual(1);
-    },
-  );
+    const persisted = await dataSource
+      .getRepository(AiPrediction)
+      .findOneByOrFail({ predictionId: result.predictionId });
+
+    expect(receivedPayloads).toHaveLength(0);
+    expect(persisted.isFallback).toBe(true);
+    expect(persisted.predictionSource).toBe('HEURISTIC_RULE');
+    expect(persisted.riskLevel).toMatch(/^(LOW|MEDIUM|HIGH)$/u);
+    expect(persisted.riskScore).toBeGreaterThanOrEqual(0);
+    expect(persisted.riskScore).toBeLessThanOrEqual(1);
+  });
 });
