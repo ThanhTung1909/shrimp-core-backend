@@ -69,7 +69,7 @@ export class AlertsService {
    * Persist-first outbox boundary for alert consumers. Notification dispatch is
    * intentionally performed only by AlertNotificationListener after this event.
    */
-  private async publishAlertTriggered(alert: Alert): Promise<void> {
+  async publishAlertTriggered(alert: Alert): Promise<void> {
     try {
       await this.redisService.publish(
         'alert:triggered',
