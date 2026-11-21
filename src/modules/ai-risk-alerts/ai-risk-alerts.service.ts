@@ -3,16 +3,16 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { Alert } from '../alerts/entities/alert.entity.js';
 import { AlertStatus } from '../../common/enums/alert-status.enum.js';
-import { AlertsService } from '../alerts/alerts.service.js';
 import { Pond } from '../ponds/entities/pond.entity.js';
 import { AiRiskAlertReceipt } from './entities/ai-risk-alert-receipt.entity.js';
+import { AiRiskNotificationOutbox } from './entities/ai-risk-notification-outbox.entity.js';
 import { mapRiskLevel, type ValidatedAiRiskEvent } from './ai-risk-event.validation.js';
 
 export type AiRiskProcessResult = 'CREATED' | 'DUPLICATE' | 'IGNORED_LOW' | 'POLICY_DISABLED' | 'POND_NOT_FOUND';
 
 @Injectable()
 export class AiRiskAlertsService {
-  constructor(private readonly dataSource: DataSource, private readonly alertsService: AlertsService, private readonly config: ConfigService) {}
+  constructor(private readonly dataSource: DataSource, private readonly config: ConfigService) {}
 
   isEnabled(): boolean {
     return this.config.get<string>('AI_RISK_ALERTS_CONSUMER_ENABLED') === 'true'
@@ -44,9 +44,9 @@ export class AiRiskAlertsService {
       });
       createdAlert = await manager.save(Alert, createdAlert);
       await manager.update(AiRiskAlertReceipt, { eventId: event.event_id }, { outcome: 'CREATED', alertId: createdAlert.alertId });
+      await manager.insert(AiRiskNotificationOutbox, { alertId: createdAlert.alertId, status: 'PENDING' });
       return 'CREATED' as const;
     }).catch((error) => error instanceof AiRiskPondNotFoundError ? 'POND_NOT_FOUND' as const : Promise.reject(error));
-    if (result === 'CREATED' && createdAlert) await this.alertsService.publishAlertTriggered(createdAlert);
     return result;
   }
 }
