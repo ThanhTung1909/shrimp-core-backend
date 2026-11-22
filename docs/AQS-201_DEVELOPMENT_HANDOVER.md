@@ -98,5 +98,8 @@ regression 138/138 PASS; lint exit 0 with pre-existing warnings; `git diff
 - Source acceptance commit: `84e0e30f7e0e97c6fd5c176ff6929dac1707fa5a`
   (`fix(aqs-201): preserve maintenance status during MQTT telemetry`).
 - Target branch: `feature/AQS-201_preserve-maintenance-status`.
+- Initial publication was normal-pushed to `origin` and fetch-verified at
+  `56f47daf40226b4e5b4e468444b1fc933308e368`; its upstream is
+  `origin/feature/AQS-201_preserve-maintenance-status`.
 - Production rollout remains out of scope; this is local-development and
   controlled-local-infrastructure evidence only.
