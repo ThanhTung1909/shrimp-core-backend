@@ -92,3 +92,11 @@ fixture rows and zero `AQS201-*` telemetry rows.
 Validation: build PASS; focused Telemetry/Gateway/Device/Prediction/Alert
 regression 138/138 PASS; lint exit 0 with pre-existing warnings; `git diff
 --check` PASS. No commit or push occurred.
+
+## Publication
+
+- Source acceptance commit: `84e0e30f7e0e97c6fd5c176ff6929dac1707fa5a`
+  (`fix(aqs-201): preserve maintenance status during MQTT telemetry`).
+- Target branch: `feature/AQS-201_preserve-maintenance-status`.
+- Production rollout remains out of scope; this is local-development and
+  controlled-local-infrastructure evidence only.
