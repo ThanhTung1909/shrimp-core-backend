@@ -1,9 +1,10 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
+import { DataSource, EntityManager, Repository, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
 import { TelemetryData } from './entities/telemetry-data.entity.js';
 import { TelemetryIngestReceipt } from './entities/telemetry-ingest-receipt.entity.js';
 import { Device } from '../devices/entities/device.entity.js';
+import { Pond } from '../ponds/entities/pond.entity.js';
 import { DeviceStatus } from '../../common/enums/device-status.enum.js';
 import { CreateTelemetryDto } from './dto/create-telemetry.dto.js';
 import { QueryTelemetryDto } from './dto/query-telemetry.dto.js';
@@ -46,6 +47,84 @@ export class TelemetryService implements OnModuleInit {
 
   async onModuleInit() {
     await this.ensureTimescaleDbConfig();
+  }
+
+  private async findDeviceForTelemetry(
+    manager: EntityManager,
+    deviceId: string,
+  ): Promise<Device | null> {
+    // A maintenance transition writes this row. The shared lock orders the
+    // threshold decision with that transition without locking a whole pond.
+    const device = await manager.findOne(Device, {
+      where: { deviceId },
+      select: {
+        deviceId: true,
+        pondId: true,
+        status: true,
+        lastActiveAt: true,
+      },
+      lock: { mode: 'pessimistic_read' },
+    });
+    // PostgreSQL does not permit FOR SHARE on the nullable side of the LEFT
+    // JOIN TypeORM emits for Device.pond. Lock the state-bearing Device row
+    // first, then load its display/routing context without broadening the lock.
+    if (device?.pondId) {
+      device.pond = await manager.findOne(Pond, {
+        where: { pondId: device.pondId },
+        select: { pondId: true, userId: true },
+      });
+    }
+    return device;
+  }
+
+  private async persistTelemetryForCurrentDevice(
+    manager: EntityManager,
+    dto: CreateTelemetryDto,
+    recordedAt: Date,
+  ): Promise<{ record: TelemetryData; device: Device } | null> {
+    const device = await this.findDeviceForTelemetry(manager, dto.deviceId);
+    if (!device) return null;
+
+    const isMaintenance = device.status === DeviceStatus.MAINTENANCE;
+    const record = await manager.save(manager.create(TelemetryData, {
+      deviceId: dto.deviceId,
+      messageId: dto.messageId,
+      temperature: dto.temperature ?? null,
+      ph: dto.ph ?? null,
+      salinity: dto.salinity ?? null,
+      dissolvedOxygen: dto.dissolvedOxygen ?? null,
+      turbidity: dto.turbidity ?? null,
+      waterLevel: dto.waterLevel ?? null,
+      isBuffered: dto.isBuffered ?? false,
+      isMaintenance,
+      recordedAt,
+    }));
+
+    if (!isMaintenance) {
+      await manager.update(Device, dto.deviceId, {
+        status: DeviceStatus.ONLINE,
+        lastActiveAt: new Date(),
+      });
+    }
+
+    return { record, device };
+  }
+
+  private async evaluateThresholdsForCurrentDevice(
+    deviceId: string,
+    dto: CreateTelemetryDto,
+  ): Promise<void> {
+    if (dto.isBuffered) {
+      this.logger.debug?.(
+        `[Alert Engine] Bỏ qua đánh giá ngưỡng cho telemetry không thời gian thực (isBuffered: true, deviceId: ${deviceId}).`,
+      );
+      return;
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      const device = await this.findDeviceForTelemetry(manager, deviceId);
+      if (device) await this.evaluateThresholds(device, dto);
+    });
   }
 
   /**
@@ -142,37 +221,23 @@ export class TelemetryService implements OnModuleInit {
         return { record: null, duplicate: true };
       }
 
-      const telemetryRecord = manager.create(TelemetryData, {
-        deviceId: dto.deviceId,
-        messageId: dto.messageId,
-        temperature: dto.temperature ?? null,
-        ph: dto.ph ?? null,
-        salinity: dto.salinity ?? null,
-        dissolvedOxygen: dto.dissolvedOxygen ?? null,
-        turbidity: dto.turbidity ?? null,
-        waterLevel: dto.waterLevel ?? null,
-        isBuffered: dto.isBuffered ?? false,
+      const persisted = await this.persistTelemetryForCurrentDevice(
+        manager,
+        dto,
         recordedAt,
-      });
-
-      const record = await manager.save(telemetryRecord);
+      );
+      if (!persisted) {
+        throw new Error(`Device disappeared before telemetry persistence: ${dto.deviceId}`);
+      }
       await manager.update(TelemetryIngestReceipt, {
         deviceId: dto.deviceId,
         messageId: dto.messageId,
-      }, { telemetryId: record.id });
-      // MAINTENANCE is an operator-controlled state. Telemetry is retained,
-      // but must not revive the device or affect its liveness state.
-      if (device.status !== DeviceStatus.MAINTENANCE) {
-        await manager.update(Device, dto.deviceId, {
-          status: DeviceStatus.ONLINE,
-          lastActiveAt: new Date(),
-        });
-      }
+      }, { telemetryId: persisted.record.id });
 
-      return { record, duplicate: false };
+      return { ...persisted, duplicate: false };
     });
 
-    if (savedResult.duplicate) {
+    if (savedResult.duplicate || !savedResult.record || !('device' in savedResult)) {
       this.logger.debug?.(
         `[Telemetry] Duplicate acknowledged device=${dto.deviceId} messageId=${dto.messageId}`,
       );
@@ -180,6 +245,7 @@ export class TelemetryService implements OnModuleInit {
     }
 
     const savedRecord = savedResult.record;
+    const savedDevice = savedResult.device;
 
     this.logger.log(
       `[Telemetry] Đã lưu dữ liệu cảm biến cho thiết bị ${dto.deviceId} vào TimescaleDB.`,
@@ -189,8 +255,8 @@ export class TelemetryService implements OnModuleInit {
       await this.redisService.publish(
         'telemetry:new',
         JSON.stringify({
-          pondId: device.pondId,
-          userId: device.pond?.userId || null,
+          pondId: savedDevice.pondId,
+          userId: savedDevice.pond?.userId || null,
           data: savedRecord,
         }),
       );
@@ -198,7 +264,7 @@ export class TelemetryService implements OnModuleInit {
       this.logger.error(`[Redis Publish Error] Lỗi publish telemetry:new: ${err.message}`);
     }
 
-    await this.evaluateThresholds(device, dto);
+    await this.evaluateThresholdsForCurrentDevice(dto.deviceId, dto);
 
     return { record: savedRecord, acknowledged: true, duplicate: false };
   }
@@ -219,27 +285,26 @@ export class TelemetryService implements OnModuleInit {
       this.logger.warn(`[Security Warning] Nhận gói tin từ thiết bị chưa đăng ký trên hệ thống (deviceId: ${dto.deviceId}). Từ chối xử lý dữ liệu.`);
       return null;
     }
-    const telemetryRecord = this.telemetryRepo.create({
-      deviceId: dto.deviceId,
-      messageId: dto.messageId,
-      temperature: dto.temperature ?? null, ph: dto.ph ?? null,
-      salinity: dto.salinity ?? null, dissolvedOxygen: dto.dissolvedOxygen ?? null,
-      turbidity: dto.turbidity ?? null, waterLevel: dto.waterLevel ?? null,
-      isBuffered: dto.isBuffered ?? false,
-      recordedAt: dto.recordedAt ? new Date(dto.recordedAt) : new Date(),
-    });
-    const savedRecord = await this.telemetryRepo.save(telemetryRecord);
-    if (device.status !== DeviceStatus.MAINTENANCE) {
-      await this.deviceRepo.update(dto.deviceId, { status: DeviceStatus.ONLINE, lastActiveAt: new Date() });
+    const savedResult = await this.dataSource.transaction((manager) =>
+      this.persistTelemetryForCurrentDevice(
+        manager,
+        dto,
+        dto.recordedAt ? new Date(dto.recordedAt) : new Date(),
+      ),
+    );
+    if (!savedResult) {
+      this.logger.warn(`[Security Warning] Thiết bị ${dto.deviceId} biến mất trước khi lưu telemetry.`);
+      return null;
     }
+    const savedRecord = savedResult.record;
     try {
       await this.redisService.publish('telemetry:new', JSON.stringify({
-        pondId: device.pondId, userId: device.pond?.userId || null, data: savedRecord,
+        pondId: savedResult.device.pondId, userId: savedResult.device.pond?.userId || null, data: savedRecord,
       }));
     } catch (err: any) {
       this.logger.error(`[Redis Publish Error] Lỗi publish telemetry:new: ${err.message}`);
     }
-    await this.evaluateThresholds(device, dto);
+    await this.evaluateThresholdsForCurrentDevice(dto.deviceId, dto);
     return savedRecord;
   }
 
@@ -450,7 +515,7 @@ export class TelemetryService implements OnModuleInit {
    */
   async getLatestByDeviceId(deviceId: string): Promise<TelemetryData | null> {
     return await this.telemetryRepo.findOne({
-      where: { deviceId },
+      where: { deviceId, isMaintenance: false },
       order: { recordedAt: 'DESC' },
     });
   }

@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { AiPrediction } from './entities/ai-prediction.entity.js';
 import { Pond } from '../ponds/entities/pond.entity.js';
 import { PondStatus } from '../../common/enums/pond-status.enum.js';
+import { DeviceStatus } from '../../common/enums/device-status.enum.js';
 import { RiskLevel } from '../../common/enums/risk-level.enum.js';
 import { TelemetryService } from '../telemetry/telemetry.service.js';
 import { PondsService } from '../ponds/ponds.service.js';
@@ -73,6 +74,9 @@ export class PredictionsService {
 
     if (pond.devices && pond.devices.length > 0 && this.telemetryService) {
       for (const dev of pond.devices) {
+        if (dev.status === DeviceStatus.MAINTENANCE) {
+          continue;
+        }
         const latestTelemetry = await this.telemetryService.getLatestByDeviceId(dev.deviceId);
         if (latestTelemetry) {
           const dissolvedOxygen = asFiniteNumber(latestTelemetry.dissolvedOxygen);
