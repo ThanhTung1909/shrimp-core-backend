@@ -1,4 +1,10 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
 import { TelemetryData } from './entities/telemetry-data.entity.js';
@@ -13,6 +19,8 @@ import { AlertStatus } from '../../common/enums/alert-status.enum.js';
 import { ThresholdConfig } from '../ponds/entities/threshold-config.entity.js';
 import { AlertsService } from '../alerts/alerts.service.js';
 import { RedisService } from '../../common/redis/redis.service.js';
+import { PondsService } from '../ponds/ponds.service.js';
+import { Role } from '../../common/enums/role.enum.js';
 
 const THRESHOLD_COOLDOWN_SECONDS = 15 * 60;
 const THRESHOLD_METRICS = [
@@ -42,7 +50,37 @@ export class TelemetryService implements OnModuleInit {
     private readonly dataSource: DataSource,
     private readonly alertsService: AlertsService,
     private readonly redisService: RedisService,
+    private readonly pondsService: PondsService,
   ) {}
+
+  /**
+   * Human HTTP readers must be authorized against the owning pond before a
+   * device ID can be used to fetch telemetry. MQTT/device ingestion bypasses
+   * this method and continues to use its own broker/device trust boundary.
+   */
+  async assertDeviceReadAccess(
+    deviceId: string,
+    currentUserId: string,
+    currentUserRole: Role,
+  ): Promise<void> {
+    const device = await this.deviceRepo.findOne({
+      where: { deviceId },
+      select: { deviceId: true, pondId: true },
+    });
+
+    if (!device) {
+      throw new NotFoundException('Không tìm thấy thiết bị');
+    }
+    if (!device.pondId) {
+      throw new ForbiddenException('Thiết bị chưa được gán vào ao nuôi được phép truy cập');
+    }
+
+    await this.pondsService.findPondById(
+      device.pondId,
+      currentUserId,
+      currentUserRole,
+    );
+  }
 
   async onModuleInit() {
     await this.ensureTimescaleDbConfig();
