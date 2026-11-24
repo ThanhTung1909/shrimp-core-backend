@@ -20,6 +20,9 @@ import { NotificationsController } from './notifications.controller.js';
 import { NotificationQueueService } from './notification-queue.service.js';
 import { NotificationQueueProcessor } from './notification.processor.js';
 import { AlertNotificationListener } from './alert-notification.listener.js';
+import { isHttpOnlyMode } from '../../common/runtime/http-only-mode.js';
+
+const httpOnlyMode = isHttpOnlyMode();
 
 @Module({
   imports: [
@@ -27,9 +30,9 @@ import { AlertNotificationListener } from './alert-notification.listener.js';
     EmailModule,
     EsmsModule,
     RedisModule,
-    BullModule.registerQueue({
+    ...(!httpOnlyMode ? [BullModule.registerQueue({
       name: QUEUE_NOTIFICATIONS,
-    }),
+    })] : []),
     TypeOrmModule.forFeature([
       NotificationPreference,
       NotificationToken,
@@ -45,18 +48,22 @@ import { AlertNotificationListener } from './alert-notification.listener.js';
     NotificationTokensService,
     NotificationPreferencesService,
     NotificationDispatcherService,
-    NotificationQueueService,
-    NotificationQueueProcessor,
-    AlertNotificationListener,
+    ...(!httpOnlyMode
+      ? [
+          NotificationQueueService,
+          NotificationQueueProcessor,
+          AlertNotificationListener,
+        ]
+      : []),
   ],
   exports: [
     NotificationDispatcherService,
     NotificationPreferencesService,
     NotificationTokensService,
     FcmService,
-    NotificationQueueService,
-    BullModule,
-    AlertNotificationListener,
+    ...(!httpOnlyMode
+      ? [NotificationQueueService, BullModule, AlertNotificationListener]
+      : []),
   ],
 })
 export class NotificationsModule {}

@@ -371,3 +371,19 @@ logout or database action was performed for the direct-HTTP/browser checks.
 | Web Playwright | PASS, 19/19 | Controlled API responses; not a Backend integration result. |
 | Core full default suite | BLOCKED | Legacy AppModule/database and real-Redis test files require an owned isolated fixture; default execution must not target shared services. |
 | Live HTTP E2E | LIVE_E2E_BLOCKED | No verified AQS-203 runtime or TEST_ONLY role/pond/device fixture was available. |
+
+## AQS-203 HTTP-only live RBAC acceptance — 2026-11-24
+
+| Check | Result | Scope / boundary |
+|---|---|---|
+| `test/http-only-mode.spec.ts` | **PASS, 6/6** | Flag default/override, GET-only block before controller/rate limiter, no TypeORM sync/migrations/drop, no Timescale init and no MQTT/gateway/cron/listener/BullMQ processor providers. |
+| FCM focused spec | **PASS** | Added HTTP-only assertion: Firebase SDK initialization is not invoked; combined FCM + HTTP-only run is **13/13**. |
+| Selected Core Vitest | **PASS, 363/363** | HTTP-only suite plus Alerts, Devices, Ponds, AQS-202 Telemetry service/controller/security, Predictions and Users unlock. No AppModule database integration suite. |
+| Core build / lint / `git diff --check` | **PASS** | Lint exits 0 with 17 pre-existing warnings; both working-tree and cached whitespace checks clean. |
+| Direct HTTP GET matrix | **PASS** | HTTP-only Backend from AQS-203 worktree: ADMIN and Manager A allowed; Manager B and unassigned FARMER lists empty; foreign Device details 403; assigned FARMER allowed. Counts are recorded in the AQS-203 handover, without IDs/tokens. |
+| Read-only DB authorization check | **PASS** | Explicit read-only transaction confirmed Farm ownership/non-ownership and assignment/non-assignment predicates. |
+
+The live process was stopped after verification. No POST/PATCH/DELETE request,
+Redis write, database write, migration, seed, MQTT/RabbitMQ operation, commit
+or push occurred. `GET /alerts/:id` does not exist in the current API; Alerts
+scope coverage is therefore list/filter only.

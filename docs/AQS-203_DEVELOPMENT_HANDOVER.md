@@ -115,3 +115,49 @@ There is no authenticated, owned fixture or running AQS-203 process, so live
 role/JWT/assignment-revocation HTTP evidence cannot be claimed. No database,
 Redis, MQTT, RabbitMQ, runtime configuration, migration, commit, push, merge,
 or deployment was changed.
+
+## AQS-203 HTTP-only live acceptance — 2026-11-24
+
+**Status: `AQS203_LIVE_RBAC_PASS`.** The worktree based on
+`b4128454d981531d2412e0c635543e9aa1e9a4bc` was started once with the
+process-only override `AQS_HTTP_ONLY=true`; `.env` was not edited. The process
+was stopped after the read-only matrix. This mode makes TypeORM schema sync,
+migrations and schema drops false; skips Timescale bootstrap; omits MQTT,
+WebSocket Redis subscriber, device-health cron, BullMQ root/queues/processors,
+notification listener and prediction scheduler; blocks FCM initialization; and
+allows only `GET`, `HEAD`, and `OPTIONS` before a controller or Redis rate
+limiter can run. The ordinary production path is unchanged when the flag is
+absent/false.
+
+The live server connected only for PostgreSQL/Redis reads required by JWT and
+route queries. Startup logged the HTTP-only Timescale/FCM skips and no MQTT,
+BullMQ, worker, scheduler or subscriber startup. No migration, seed, schema
+synchronization, MQTT/RabbitMQ publication, Redis write/ACK/purge, or HTTP
+mutation was issued.
+
+| Actor / probe | HTTP evidence |
+|---|---|
+| ADMIN | Alerts page/filter `200` (866 / 9 totals, page size 2); Devices page/detail `200` (589 total, page size 2). |
+| MANAGER A (owning Farm) | Alerts/Devices pond filter `200` (9 / 3 totals, page size 2); Device detail `200`. |
+| MANAGER B (foreign Farm) | Same foreign Alert/Device filters `200` with `0` total/records; foreign Device detail `403`. |
+| Assigned FARMER | Assigned Alert/Device filters `200` (7 / 3 totals, page size 2); assigned Device detail `200`. |
+| Unassigned FARMER | Foreign Alert/Device filters `200` with `0` total/records; foreign Device detail `403`. |
+
+Read-only SQL in an explicit `BEGIN READ ONLY` transaction confirmed: Manager
+A owns the selected Farm; Manager B does not; the assigned FARMER has the
+selected `pond_farmer_assignments` row; and the unassigned FARMER has none.
+The live process used short-lived, in-memory signed access tokens matching the
+existing active users and token versions; tokens, IDs, passwords and response
+records were neither printed nor saved. Alerts has no `GET /alerts/:id` route
+in current source, so Alert scope was validated through the scoped list/filter
+endpoint; the only Alert detail-like route is the blocked mutation
+`PATCH /alerts/:id/resolve`.
+
+### Added safety evidence
+
+| Check | Result |
+|---|---|
+| HTTP-only unit/module tests | **PASS, 6/6** — explicit flag, method gate before controller/rate-limit writes, TypeORM no schema init, Timescale skip, and absence of MQTT/gateway/cron/listener/BullMQ processor providers. |
+| FCM startup flag | **PASS** — the focused FCM spec proves HTTP-only does not invoke Firebase SDK initialization; combined HTTP-only + FCM tests are **13/13**. |
+| AQS-203 selected cross-module Vitest | **PASS, 363/363** — previous 357 assertions plus HTTP-only suite; Alerts, Devices, Ponds, AQS-202 Telemetry security, Predictions and Users unlock. |
+| Core build / lint / whitespace | **PASS** — `npm run build`; `npm run lint` exit 0 with 17 pre-existing warnings; `git diff --check` and cached check clean. |

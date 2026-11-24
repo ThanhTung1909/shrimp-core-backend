@@ -1,5 +1,27 @@
 # Task History
 
+## AQS-203 — Safe HTTP-only live RBAC mode
+
+- **Date:** 2026-11-24
+- **Scope:** Added the process-only `AQS_HTTP_ONLY=true` runtime gate to the
+  AQS-203 backend worktree. Production defaults remain unchanged. HTTP-only
+  skips SQL initialization, MQTT, gateway/Redis subscriptions, BullMQ queues
+  and processors, scheduler/cron, notification listener and FCM init; it
+  blocks non-read HTTP methods before any controller or Redis throttler.
+- **Safety:** `.env` was not changed. TypeORM is pinned to no synchronize,
+  migration or schema drop in this mode. The live server was stopped after the
+  matrix; no mutation request, schema/data/cache/broker write, migration,
+  seed, ACK/purge, commit or push occurred.
+- **Evidence:** new HTTP-only suite **6/6 PASS**, including a focused FCM
+  startup assertion in the combined **13/13** run; selected cross-module
+  regression **363/363 PASS**; build/lint/diff PASS (17 baseline lint
+  warnings). Direct GET matrix against the existing Backend data passed for
+  ADMIN, Manager A/B, assigned FARMER and unassigned FARMER. Explicit
+  read-only SQL verified the respective Farm ownership and farmer assignment
+  predicates.
+- **Result:** `AQS203_LIVE_RBAC_PASS`. Details, sanitized counts and limits
+  are retained in `docs/AQS-203_DEVELOPMENT_HANDOVER.md`.
+
 ## AQS-203 — Alerts & Devices assignment-only RBAC
 
 - **Date:** 2026-11-24

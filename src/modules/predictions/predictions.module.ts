@@ -13,13 +13,17 @@ import { PredictionSchedulerService } from './prediction-scheduler.service.js';
 import { PredictionsController } from './predictions.controller.js';
 import { TelemetryModule } from '../telemetry/telemetry.module.js';
 import { PondsModule } from '../ponds/ponds.module.js';
+import { isHttpOnlyMode } from '../../common/runtime/http-only-mode.js';
+import { HttpOnlyPredictionSchedulerService } from './http-only-prediction-scheduler.service.js';
+
+const httpOnlyMode = isHttpOnlyMode();
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([AiPrediction, Pond, ManualTestLog, ShrimpBatch]),
-    BullModule.registerQueue({
+    ...(!httpOnlyMode ? [BullModule.registerQueue({
       name: QUEUE_PREDICTIONS,
-    }),
+    })] : []),
     TelemetryModule,
     PondsModule,
   ],
@@ -27,13 +31,19 @@ import { PondsModule } from '../ponds/ponds.module.js';
   providers: [
     PredictionsService,
     AiPredictionHttpClient,
-    PredictionQueueProcessor,
-    PredictionSchedulerService,
+    ...(!httpOnlyMode
+      ? [PredictionQueueProcessor, PredictionSchedulerService]
+      : [
+          {
+            provide: PredictionSchedulerService,
+            useClass: HttpOnlyPredictionSchedulerService,
+          },
+        ]),
   ],
   exports: [
     PredictionsService,
     AiPredictionHttpClient,
-    BullModule,
+    ...(!httpOnlyMode ? [BullModule] : []),
     TypeOrmModule,
   ],
 })

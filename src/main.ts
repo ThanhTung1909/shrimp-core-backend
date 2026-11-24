@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import * as mqtt from 'mqtt';
 
 import { configureHttpApp } from './http-app.config.js';
+import { isHttpOnlyMode } from './common/runtime/http-only-mode.js';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -42,6 +43,11 @@ async function bootstrap() {
   console.log(
     `📚 [Swagger UI] Tài liệu API tương tác tại: http://0.0.0.0:${port}/api/docs`,
   );
+
+  if (isHttpOnlyMode()) {
+    console.log('[HTTP-only] MQTT client, subscribers, workers, schedulers and SQL initialization are disabled.');
+    return;
+  }
 
   // Test kết nối MQTT Broker nội bộ
   const mqttUrl =

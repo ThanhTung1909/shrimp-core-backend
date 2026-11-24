@@ -1,5 +1,33 @@
 # Current State and Handover
 
+## AQS-203 — Safe HTTP-only live RBAC acceptance — 2026-11-24
+
+**Status: `AQS203_LIVE_RBAC_PASS`.** The AQS-203 worktree based on
+`b4128454d981531d2412e0c635543e9aa1e9a4bc` passed direct HTTP-only RBAC
+acceptance against existing data. `AQS_HTTP_ONLY=true` was a process override,
+not an `.env` edit; the process was stopped immediately afterwards. Its safety
+gate blocked non-read methods before controllers/rate limiting, forced no
+TypeORM schema sync/migrations/drops, skipped Timescale, MQTT, Redis
+subscribers/WebSocket gateway, BullMQ queues/processors, schedulers, cron,
+notification listener and FCM initialization. PostgreSQL and Redis were used
+only for JWT/read queries.
+
+Live read-only evidence: ADMIN lists/details returned 200; Manager A saw
+own-Farm Alerts/Devices (totals 9/3) and detail 200; Manager B saw foreign
+filters as empty and Device detail 403; assigned FARMER saw assigned scope
+(7/3) and detail 200; unassigned FARMER saw foreign lists empty and detail
+403. The transaction-only DB check confirmed both Farm ownership predicates,
+the assigned farmer record and the zero-assignment farmer predicate. No
+mutation, migration, seed, schema change, Redis write, broker action, commit,
+push or merge occurred. Alert detail is not an HTTP GET route in current
+source, so its scoped filter list is the applicable read endpoint.
+
+Source verification now passes: HTTP-only tests **6/6** plus the FCM startup
+flag (combined **13/13**), selected AQS-203 cross-module suite **363/363**,
+Core build, lint (17 baseline warnings) and
+both whitespace checks. See `docs/AQS-203_DEVELOPMENT_HANDOVER.md` for the
+sanitized HTTP matrix and implementation impact.
+
 ## AQS-203 — Alerts & Devices assignment-only RBAC — 2026-11-24
 
 **Status: `AQS203_PARTIAL_PASS`.** Alerts and Devices no longer treat
