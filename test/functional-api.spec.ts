@@ -355,7 +355,26 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
     };
 
 
-    usersService = new UsersService(usersRepo, loginLockoutService);
+    const managerScopeQueryBuilder = {
+      innerJoin: vi.fn().mockReturnThis(),
+      leftJoin: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      andWhere: vi.fn().mockReturnThis(),
+      getExists: vi.fn().mockResolvedValue(true),
+    };
+    const managerScopePondRepo = {
+      createQueryBuilder: vi.fn(() => managerScopeQueryBuilder),
+    };
+    const managerAssignmentRepo = {
+      create: vi.fn((assignment) => assignment),
+      save: vi.fn(async (assignment) => assignment),
+    };
+    usersService = new UsersService(
+      usersRepo,
+      loginLockoutService,
+      managerScopePondRepo as any,
+      managerAssignmentRepo as any,
+    );
     usersController = new UsersController(usersService);
     authService = new AuthService(
       usersService,
@@ -898,6 +917,7 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
           phoneNumber: '0908887777',
           password: 'Password123!',
           role: Role.FARMER,
+          pondId: 'manager-scope-pond',
         },
         MANAGER_ID,
       );
@@ -1326,6 +1346,7 @@ describe('FUNCTIONAL API TEST SUITE (PHASE 11)', () => {
           phoneNumber: workerPhone,
           password: 'WorkerPassword123!',
           role: Role.FARMER,
+          pondId: 'manager-scope-pond',
         },
         MANAGER_ID,
       );

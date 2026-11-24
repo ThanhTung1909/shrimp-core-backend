@@ -49,6 +49,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
       createUser: vi.fn(),
       incrementTokenVersion: vi.fn(),
       updatePassword: vi.fn(),
+      assertManagerCanManageUser: vi.fn().mockResolvedValue(undefined),
       sanitizeUser: vi.fn((u) => {
         const { passwordHash, ...safe } = u;
         return safe;
@@ -765,18 +766,39 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
       expect(result).toHaveProperty('userId', 'my-id');
     });
 
-    it('MANAGER viewing any profile -> allowed', async () => {
-      usersService.findById.mockResolvedValue({
-        userId: 'any-id',
-        fullName: 'Any User',
-      });
+    it('MANAGER viewing a profile in their farm scope -> allowed', async () => {
+      const scopedUser = {
+        userId: 'scoped-user-id',
+        fullName: 'Scoped User',
+        role: Role.FARMER,
+      };
+      usersService.findById.mockResolvedValue(scopedUser);
 
       const result = await usersController.getUserById(
-        'any-id',
+        'scoped-user-id',
         'manager-id',
         Role.MANAGER,
       );
-      expect(result).toHaveProperty('userId', 'any-id');
+      expect(usersService.assertManagerCanManageUser).toHaveBeenCalledWith(
+        'manager-id',
+        scopedUser,
+      );
+      expect(result).toHaveProperty('userId', 'scoped-user-id');
+    });
+
+    it('MANAGER viewing a profile outside their farm scope -> 403 Forbidden', async () => {
+      usersService.findById.mockResolvedValue({
+        userId: 'foreign-user-id',
+        fullName: 'Foreign User',
+        role: Role.FARMER,
+      });
+      usersService.assertManagerCanManageUser.mockRejectedValueOnce(
+        new ForbiddenException('out of scope'),
+      );
+
+      await expect(
+        usersController.getUserById('foreign-user-id', 'manager-id', Role.MANAGER),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 

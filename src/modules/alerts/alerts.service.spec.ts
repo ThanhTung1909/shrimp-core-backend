@@ -17,6 +17,7 @@ describe('AlertsService', () => {
 
     queryBuilder = {
       leftJoinAndSelect: vi.fn().mockReturnThis(),
+      leftJoin: vi.fn().mockReturnThis(),
       andWhere: vi.fn().mockReturnThis(),
       orderBy: vi.fn().mockReturnThis(),
       skip: vi.fn().mockReturnThis(),
@@ -28,6 +29,7 @@ describe('AlertsService', () => {
       save: vi.fn(async (data) => ({ alertId: 'alert-1', ...data })),
       findOne: vi.fn(),
       createQueryBuilder: vi.fn(() => queryBuilder),
+      manager: { query: vi.fn() },
     };
     mockRedisService = { publish: vi.fn().mockResolvedValue(1) };
     mockDispatcher = { dispatchAlert: vi.fn().mockResolvedValue(undefined) };
@@ -126,7 +128,7 @@ describe('AlertsService', () => {
       expect(queryBuilder.leftJoinAndSelect).toHaveBeenCalledWith('alert.pond', 'pond');
       expect(queryBuilder.leftJoinAndSelect).toHaveBeenCalledWith('alert.device', 'device');
       expect(queryBuilder.andWhere).toHaveBeenCalledWith(
-        '(pond.user_id = :currentUserId OR EXISTS (SELECT 1 FROM pond_farmer_assignments pfa WHERE pfa.pond_id = pond.pond_id AND pfa.farmer_id = :currentUserId))',
+        'EXISTS (SELECT 1 FROM pond_farmer_assignments pfa WHERE pfa.pond_id = pond.pond_id AND pfa.farmer_id = :currentUserId)',
         { currentUserId: 'farmer-1' },
       );
       expect(queryBuilder.andWhere).toHaveBeenCalledWith(
@@ -151,16 +153,35 @@ describe('AlertsService', () => {
         expect.anything(),
       );
     });
+
+    it('limits a MANAGER list to Farms they own, not a matching pond user ID', async () => {
+      await service.findAll({ pondId: 'foreign-pond' }, 'manager-1', Role.MANAGER);
+
+      expect(queryBuilder.leftJoin).toHaveBeenCalledWith(
+        'farms',
+        'farm',
+        'farm.farm_id = pond.farm_id',
+      );
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        'farm.owner_id = :currentUserId',
+        { currentUserId: 'manager-1' },
+      );
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        'alert.pond_id = :pondId',
+        { pondId: 'foreign-pond' },
+      );
+    });
   });
 
   describe('resolveAlert', () => {
-    it('resolves an owned FARMER alert using the authenticated user ID', async () => {
+    it('resolves a FARMER alert only with a current pond assignment', async () => {
       const alert = {
         alertId: 'alert-1',
-        pond: { userId: 'farmer-1' },
+        pond: { pondId: 'pond-1', userId: 'farmer-1' },
         status: AlertStatus.ACTIVE,
       };
       alertRepo.findOne.mockResolvedValue(alert);
+      alertRepo.manager.query.mockResolvedValue([{ exists: 1 }]);
 
       await service.resolveAlert(
         'alert-1',
@@ -183,14 +204,28 @@ describe('AlertsService', () => {
       );
     });
 
-    it('rejects a FARMER resolving an alert owned by another user without saving', async () => {
+    it('rejects a FARMER who is the legacy pond owner but has no assignment', async () => {
       alertRepo.findOne.mockResolvedValue({
         alertId: 'other-alert',
-        pond: { userId: 'farmer-2' },
+        pond: { pondId: 'pond-1', userId: 'farmer-1' },
       });
+      alertRepo.manager.query.mockResolvedValue([]);
 
       await expect(
         service.resolveAlert('other-alert', 'farmer-1', {}, Role.FARMER),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(alertRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a MANAGER whose user ID matches the pond but who does not own its Farm', async () => {
+      alertRepo.findOne.mockResolvedValue({
+        alertId: 'foreign-alert',
+        pond: { pondId: 'pond-1', farmId: 'farm-b', userId: 'manager-1' },
+      });
+      alertRepo.manager.query.mockResolvedValue([]);
+
+      await expect(
+        service.resolveAlert('foreign-alert', 'manager-1', {}, Role.MANAGER),
       ).rejects.toBeInstanceOf(ForbiddenException);
       expect(alertRepo.save).not.toHaveBeenCalled();
     });

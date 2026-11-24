@@ -94,6 +94,7 @@ export class AlertsService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<{ data: Alert[]; total: number }> {
+    this.assertSupportedRole(currentUserRole);
     const { page = 1, limit = 20, pondId, deviceId, isResolved, startDate, endDate } = query;
     const skip = (page - 1) * limit;
 
@@ -103,13 +104,13 @@ export class AlertsService {
 
     if (currentUserRole === Role.FARMER) {
       qb.andWhere(
-        '(pond.user_id = :currentUserId OR EXISTS (SELECT 1 FROM pond_farmer_assignments pfa WHERE pfa.pond_id = pond.pond_id AND pfa.farmer_id = :currentUserId))',
+        'EXISTS (SELECT 1 FROM pond_farmer_assignments pfa WHERE pfa.pond_id = pond.pond_id AND pfa.farmer_id = :currentUserId)',
         { currentUserId },
       );
     } else if (currentUserRole === Role.MANAGER) {
       qb.leftJoin('farms', 'farm', 'farm.farm_id = pond.farm_id');
       qb.andWhere(
-        '(pond.user_id = :currentUserId OR farm.owner_id = :currentUserId)',
+        'farm.owner_id = :currentUserId',
         { currentUserId },
       );
     }
@@ -149,6 +150,7 @@ export class AlertsService {
     dto: ResolveAlertDto,
     currentUserRole: Role,
   ): Promise<Alert> {
+    this.assertSupportedRole(currentUserRole);
     const alert = await this.alertRepo.findOne({
       where: { alertId },
       relations: { pond: true },
@@ -158,29 +160,23 @@ export class AlertsService {
     }
 
     if (currentUserRole === Role.FARMER) {
-      const isOwner = alert.pond?.userId === userId;
-      let isAssigned = isOwner;
-      if (!isAssigned && alert.pond?.pondId) {
-        const assignmentCount = await this.alertRepo.manager.query(
+      const assignmentCount = alert.pond?.pondId
+        ? await this.alertRepo.manager.query(
           'SELECT 1 FROM pond_farmer_assignments WHERE pond_id = $1 AND farmer_id = $2 LIMIT 1',
           [alert.pond.pondId, userId],
-        );
-        isAssigned = assignmentCount && assignmentCount.length > 0;
-      }
-      if (!isAssigned) {
+        )
+        : [];
+      if (!assignmentCount?.length) {
         throw new ForbiddenException('Bạn không có quyền xử lý cảnh báo này!');
       }
     } else if (currentUserRole === Role.MANAGER) {
-      const isOwner = alert.pond?.userId === userId;
-      let hasAccess = isOwner;
-      if (!hasAccess && alert.pond?.farmId) {
-        const farmCount = await this.alertRepo.manager.query(
+      const farmCount = alert.pond?.farmId
+        ? await this.alertRepo.manager.query(
           'SELECT 1 FROM farms WHERE farm_id = $1 AND owner_id = $2 LIMIT 1',
           [alert.pond.farmId, userId],
-        );
-        hasAccess = farmCount && farmCount.length > 0;
-      }
-      if (!hasAccess) {
+        )
+        : [];
+      if (!farmCount?.length) {
         throw new ForbiddenException('Bạn không có quyền xử lý cảnh báo này!');
       }
     }
@@ -194,5 +190,11 @@ export class AlertsService {
     }
 
     return await this.alertRepo.save(alert);
+  }
+
+  private assertSupportedRole(role: Role): void {
+    if (role !== Role.ADMIN && role !== Role.MANAGER && role !== Role.FARMER) {
+      throw new ForbiddenException('Vai trò người dùng không được phép truy cập cảnh báo!');
+    }
   }
 }
