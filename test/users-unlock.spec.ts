@@ -158,8 +158,10 @@ describe('Unrelated user updates cannot overwrite durable authentication state',
     const response = await users.updateProfile(before.userId, { fullName: 'After' });
     expect(repository.update).toHaveBeenCalledWith({ userId: before.userId }, { fullName: 'After' });
     expect(repository.save).not.toHaveBeenCalled();
-    expect(response.isLocked).toBe(true);
-    expect(response.tokenVersion).toBe(2);
+    expect(after.isLocked).toBe(true);
+    expect(after.tokenVersion).toBe(2);
+    expect(response).not.toHaveProperty('isLocked');
+    expect(response).not.toHaveProperty('tokenVersion');
   });
 
   it('updates administrative fields selectively and atomically increments tokenVersion', async () => {
@@ -180,7 +182,9 @@ describe('Unrelated user updates cannot overwrite durable authentication state',
     expect(patch.role).toBe(Role.MANAGER);
     expect(patch.tokenVersion()).toBe('"token_version" + 1');
     expect(repository.save).not.toHaveBeenCalled();
-    expect(response.isLocked).toBe(true);
-    expect(response.tokenVersion).toBe(3);
+    expect(after.isLocked).toBe(true);
+    expect(after.tokenVersion).toBe(3);
+    expect(response).not.toHaveProperty('isLocked');
+    expect(response).not.toHaveProperty('tokenVersion');
   });
 });
