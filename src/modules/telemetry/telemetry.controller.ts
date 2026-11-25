@@ -46,10 +46,7 @@ export class TelemetryController {
       );
     }
 
-    return {
-      success: true,
-      data: latest,
-    };
+    return latest;
   }
 
   /**
@@ -72,13 +69,15 @@ export class TelemetryController {
       deviceId,
       query,
     );
+    const page = query.page || 1;
+    const limit = query.limit || 100;
 
     return {
-      success: true,
-      total,
-      page: query.page || 1,
-      limit: query.limit || 100,
       data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
     };
   }
 }
