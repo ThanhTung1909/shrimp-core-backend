@@ -7,6 +7,7 @@ import { ConflictException } from '@nestjs/common';
 import { validate } from 'class-validator';
 import { CreatePondDto } from './dto/create-pond.dto.js';
 import { UpdatePondDto } from './dto/update-pond.dto.js';
+import { FindPondsQueryDto } from './dto/find-ponds-query.dto.js';
 
 describe('PondsService', () => {
   let service: PondsService;
@@ -352,6 +353,158 @@ describe('PondsService', () => {
       expect(await validate(decimalCapacity)).toEqual(
         expect.arrayContaining([expect.objectContaining({ property: 'capacity' })]),
       );
+    });
+
+    it('FindPondsQueryDto chấp nhận farmId UUID v4 hợp lệ và từ chối farmId không hợp lệ', async () => {
+      const validDto = Object.assign(new FindPondsQueryDto(), {
+        farmId: '11111111-1111-4111-8111-111111111111',
+      });
+      const emptyDto = new FindPondsQueryDto();
+      const invalidDto = Object.assign(new FindPondsQueryDto(), {
+        farmId: 'not-a-uuid',
+      });
+
+      await expect(validate(validDto)).resolves.toHaveLength(0);
+      await expect(validate(emptyDto)).resolves.toHaveLength(0);
+      expect(await validate(invalidDto)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ property: 'farmId' })]),
+      );
+    });
+  });
+
+  describe('AQS-205 farmId filtering, farmerAssignments join & sanitization', () => {
+    const farmId = '11111111-1111-4111-8111-111111111111';
+
+    it('ADMIN/default findAllPonds lọc theo farmId, join farmerAssignments: { farmer: true } và ẩn trường nhạy cảm', async () => {
+      const rawPond = {
+        pondId: 'pond-1',
+        pondName: 'Ao 1',
+        farmId,
+        user: {
+          userId: 'owner-1',
+          fullName: 'Owner One',
+          passwordHash: 'secret-hash',
+          fcmToken: 'secret-fcm',
+          tokenVersion: 2,
+          isLocked: false,
+          mustChangePassword: true,
+        },
+        farmerAssignments: [
+          {
+            assignmentId: 'assign-1',
+            pondId: 'pond-1',
+            farmerId: 'farmer-1',
+            farmer: {
+              userId: 'farmer-1',
+              fullName: 'Farmer One',
+              passwordHash: 'farmer-hash',
+              fcmToken: 'farmer-fcm',
+              tokenVersion: 3,
+              isLocked: true,
+              mustChangePassword: false,
+            },
+          },
+        ],
+      };
+      mockPondRepo.findAndCount.mockResolvedValue([[rawPond], 1]);
+
+      const result = await service.findAllPonds({ farmId }, 'admin-1', Role.ADMIN);
+
+      expect(mockPondRepo.findAndCount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { farmId },
+          relations: expect.objectContaining({
+            farmerAssignments: { farmer: true },
+          }),
+        }),
+      );
+      expect(result.data[0].user).toEqual({
+        userId: 'owner-1',
+        fullName: 'Owner One',
+      });
+      expect(result.data[0].farmerAssignments?.[0].farmer).toEqual({
+        userId: 'farmer-1',
+        fullName: 'Farmer One',
+      });
+    });
+
+    it('findPondById luôn join farmerAssignments: { farmer: true } và ẩn trường nhạy cảm của farmer', async () => {
+      mockPondRepo.findOne.mockResolvedValue({
+        pondId: 'pond-1',
+        userId: 'owner-1',
+        user: {
+          userId: 'owner-1',
+          fullName: 'Owner One',
+          passwordHash: 'hash',
+          fcmToken: 'fcm',
+          tokenVersion: 1,
+          isLocked: false,
+          mustChangePassword: false,
+        },
+        farmerAssignments: [
+          {
+            assignmentId: 'assign-1',
+            farmerId: 'farmer-1',
+            farmer: {
+              userId: 'farmer-1',
+              fullName: 'Farmer One',
+              passwordHash: 'hash2',
+              fcmToken: 'fcm2',
+              tokenVersion: 4,
+              isLocked: false,
+              mustChangePassword: true,
+            },
+          },
+        ],
+      });
+
+      const result = await service.findPondById('pond-1', 'admin-1', Role.ADMIN);
+
+      expect(mockPondRepo.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          relations: expect.objectContaining({
+            farmerAssignments: { farmer: true },
+          }),
+        }),
+      );
+      expect(result.user).toEqual({ userId: 'owner-1', fullName: 'Owner One' });
+      expect(result.farmerAssignments?.[0].farmer).toEqual({
+        userId: 'farmer-1',
+        fullName: 'Farmer One',
+      });
+    });
+
+    it('FARMER và MANAGER QueryBuilder paths đều áp dụng lọc farmId khi có assignmentRepo', async () => {
+      const qb = {
+        innerJoin: vi.fn().mockReturnThis(),
+        leftJoinAndSelect: vi.fn().mockReturnThis(),
+        andWhere: vi.fn().mockReturnThis(),
+        orderBy: vi.fn().mockReturnThis(),
+        skip: vi.fn().mockReturnThis(),
+        take: vi.fn().mockReturnThis(),
+        getManyAndCount: vi.fn().mockResolvedValue([[], 0]),
+      };
+      const scopedPondRepo = {
+        ...mockPondRepo,
+        createQueryBuilder: vi.fn(() => qb),
+      };
+      const scopedService = new PondsService(
+        scopedPondRepo as any,
+        mockThresholdRepo,
+        mockManualLogRepo,
+        {} as any,
+        {} as any,
+        { exist: vi.fn() } as any,
+      );
+
+      await scopedService.findAllPonds({ farmId }, 'farmer-1', Role.FARMER);
+      expect(qb.andWhere).toHaveBeenCalledWith('pond.farmId = :farmId', { farmId });
+
+      qb.andWhere.mockClear();
+      await scopedService.findAllPonds({ farmId }, 'manager-1', Role.MANAGER);
+      expect(qb.leftJoinAndSelect).toHaveBeenCalledWith('pond.farmerAssignments', 'farmerAssignments');
+      expect(qb.leftJoinAndSelect).toHaveBeenCalledWith('farmerAssignments.farmer', 'farmer');
+      expect(qb.andWhere).toHaveBeenCalledWith('pond.farmId = :farmId', { farmId });
     });
   });
 
