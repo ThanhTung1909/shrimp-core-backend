@@ -13,6 +13,7 @@ import { QueryAlertDto } from './dto/query-alert.dto.js';
 import { ResolveAlertDto } from './dto/resolve-alert.dto.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import { ResponseMessage } from '../../common/decorators/response-message.decorator.js';
 import type { User } from '../users/entities/user.entity.js';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 
@@ -61,6 +62,7 @@ export class AlertsController {
    * PATCH /alerts/:id/resolve
    */
   @Patch(':id/resolve')
+  @ResponseMessage('Đã giải quyết cảnh báo thành công')
   @ApiOperation({
     summary: 'Xác nhận và đánh dấu đã xử lý cảnh báo',
   })

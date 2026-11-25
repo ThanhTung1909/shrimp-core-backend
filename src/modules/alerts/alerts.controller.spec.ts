@@ -19,14 +19,16 @@ describe('AlertsController response standardization', () => {
     };
   };
 
-  const wrapWithInterceptor = async <T>(method: string, value: T) => {
-    const reflector = {
-      getAllAndOverride: vi.fn().mockReturnValue(undefined),
-    } as unknown as Reflector;
+  const wrapWithInterceptor = async <T>(
+    method: string,
+    handlerName: keyof AlertsController,
+    value: T,
+  ) => {
+    const reflector = new Reflector();
     const interceptor = new TransformInterceptor(reflector);
     const context = {
-      getHandler: vi.fn(),
-      getClass: vi.fn(),
+      getHandler: () => AlertsController.prototype[handlerName],
+      getClass: () => AlertsController,
       switchToHttp: () => ({
         getRequest: () => ({ method }),
         getResponse: () => ({ statusCode: 200 }),
@@ -67,7 +69,7 @@ describe('AlertsController response standardization', () => {
     });
     expect(res).not.toHaveProperty('success');
 
-    const enveloped = await wrapWithInterceptor('GET', res);
+    const enveloped = await wrapWithInterceptor('GET', 'findAll', res);
     expect(enveloped).toEqual({
       success: true,
       statusCode: 200,
@@ -100,11 +102,12 @@ describe('AlertsController response standardization', () => {
     });
   });
 
-  it('resolve returns resolved alert directly without double-wrapping', async () => {
+  it('resolve returns resolved alert directly and preserves Alert.message under TransformInterceptor via @ResponseMessage', async () => {
     const { controller, alertsService } = makeController();
     const resolvedAlert = {
       alertId: 'alert-1',
       status: 'RESOLVED',
+      message: 'Chỉ số DO đo được 2.5, thấp hơn ngưỡng 4 (khoảng cho phép 4 - 8).',
       resolutionNote: 'Đã kiểm tra máy sục khí',
     };
     alertsService.resolveAlert.mockResolvedValue(resolvedAlert);
@@ -124,12 +127,15 @@ describe('AlertsController response standardization', () => {
     expect(res).toEqual(resolvedAlert);
     expect(res).not.toHaveProperty('success');
 
-    const enveloped = await wrapWithInterceptor('PATCH', res);
+    const enveloped = await wrapWithInterceptor('PATCH', 'resolve', res);
     expect(enveloped).toEqual({
       success: true,
       statusCode: 200,
-      message: 'Cập nhật dữ liệu thành công',
+      message: 'Đã giải quyết cảnh báo thành công',
       data: resolvedAlert,
     });
+    expect(enveloped.data.message).toBe(
+      'Chỉ số DO đo được 2.5, thấp hơn ngưỡng 4 (khoảng cho phép 4 - 8).',
+    );
   });
 });
