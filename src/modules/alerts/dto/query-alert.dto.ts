@@ -1,5 +1,15 @@
 import { Type } from 'class-transformer';
-import { IsBoolean, IsDateString, IsInt, IsOptional, IsUUID, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsDateString,
+  IsInt,
+  IsOptional,
+  Matches,
+  Min,
+} from 'class-validator';
+
+const CANONICAL_UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class QueryAlertDto {
   @IsOptional()
@@ -15,11 +25,11 @@ export class QueryAlertDto {
   limit?: number = 20;
 
   @IsOptional()
-  @IsUUID()
+  @Matches(CANONICAL_UUID_REGEX, { message: 'pondId must be a UUID' })
   pondId?: string;
 
   @IsOptional()
-  @IsUUID()
+  @Matches(CANONICAL_UUID_REGEX, { message: 'deviceId must be a UUID' })
   deviceId?: string;
 
   @IsOptional()

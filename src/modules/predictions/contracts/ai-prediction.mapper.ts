@@ -640,6 +640,17 @@ function validateRequiredCurrentMetrics(
   };
 }
 
+const RECENT_HISTORY_METRIC_BOUNDS: Record<
+  Exclude<keyof WaterQualityHistoryPoint, 'recordedAt'>,
+  readonly [number, number]
+> = {
+  dissolvedOxygen: [0, 25],
+  ph: [4, 11],
+  temperature: [10, 45],
+  salinity: [0, 50],
+  turbidity: [0, 500],
+};
+
 function sanitizeRecentHistory(raw: unknown): WaterQualityHistoryPoint[] {
   if (!Array.isArray(raw)) return [];
 
@@ -657,7 +668,8 @@ function sanitizeRecentHistory(raw: unknown): WaterQualityHistoryPoint[] {
 
     for (const key of ['dissolvedOxygen', 'ph', 'temperature', 'salinity', 'turbidity'] as const) {
       const value = entry[key];
-      if (typeof value === 'number' && Number.isFinite(value)) {
+      const [min, max] = RECENT_HISTORY_METRIC_BOUNDS[key];
+      if (typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max) {
         point[key] = value;
         hasMetric = true;
       }

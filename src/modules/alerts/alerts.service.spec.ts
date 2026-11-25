@@ -208,6 +208,15 @@ describe('AlertsService', () => {
       await expect(validate(dto)).resolves.toHaveLength(0);
     });
 
+    it('accepts seeded canonical UUIDs without RFC-4122 version bits', async () => {
+      const dto = Object.assign(new QueryAlertDto(), {
+        pondId: '22222222-2222-2222-2222-222222222201',
+        deviceId: '33333333-3333-4333-a333-333333333301',
+      });
+
+      await expect(validate(dto)).resolves.toHaveLength(0);
+    });
+
     it('rejects invalid pondId, startDate, and endDate', async () => {
       const dto = Object.assign(new QueryAlertDto(), {
         pondId: 'invalid-uuid',
