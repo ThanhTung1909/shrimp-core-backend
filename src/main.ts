@@ -1,7 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
 import { ConfigService } from '@nestjs/config';
-import * as mqtt from 'mqtt';
 
 import { configureHttpApp } from './http-app.config.js';
 
@@ -42,18 +41,5 @@ async function bootstrap() {
   console.log(
     `📚 [Swagger UI] Tài liệu API tương tác tại: http://0.0.0.0:${port}/api/docs`,
   );
-
-  // Test kết nối MQTT Broker nội bộ
-  const mqttUrl =
-    configService.get<string>('MQTT_BROKER_URL') || 'mqtt://localhost:1883';
-  const mqttClient = mqtt.connect(mqttUrl);
-
-  mqttClient.on('connect', () => {
-    console.log(`[MQTT] Kết nối thành công tới Broker: ${mqttUrl}`);
-  });
-
-  mqttClient.on('error', (err) => {
-    console.error(`[MQTT] Kết nối thất bại:`, err.message);
-  });
 }
 bootstrap();
