@@ -44,13 +44,15 @@ export class AlertsController {
       currentUser.userId,
       currentUser.role,
     );
+    const page = query.page || 1;
+    const limit = query.limit || 20;
 
     return {
-      success: true,
-      total,
-      page: query.page || 1,
-      limit: query.limit || 20,
       data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
     };
   }
 
@@ -75,16 +77,11 @@ export class AlertsController {
     @Body() dto: ResolveAlertDto,
     @CurrentUser() currentUser: User,
   ) {
-    const result = await this.alertsService.resolveAlert(
+    return this.alertsService.resolveAlert(
       id,
       currentUser.userId,
       dto,
       currentUser.role,
     );
-
-    return {
-      success: true,
-      data: result,
-    };
   }
 }
