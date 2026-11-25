@@ -18,6 +18,10 @@ import { FindUsersQueryDto } from './dto/find-users-query.dto.js';
 import * as bcrypt from 'bcrypt';
 import { Role } from '../../common/enums/role.enum.js';
 import { LoginLockoutService } from '../../common/redis/login-lockout.service.js';
+import {
+  sanitizeUser as sanitizeUserUtil,
+  SanitizedUser,
+} from '../../common/utils/sanitize-user.util.js';
 
 @Injectable()
 export class UsersService {
@@ -140,10 +144,9 @@ export class UsersService {
     );
   }
 
-  // Loại bỏ passwordHash trước khi trả về client
-  sanitizeUser(user: User): Omit<User, 'passwordHash'> {
-    const { passwordHash: _passwordHash, ...safeUser } = user;
-    return safeUser;
+  // Loại bỏ các trường nhạy cảm trước khi trả về client
+  sanitizeUser(user: User): SanitizedUser<User> {
+    return sanitizeUserUtil(user);
   }
 
   // Tìm người dùng theo số điện thoại
@@ -206,7 +209,7 @@ export class UsersService {
 
   // Lấy danh sách tất cả người dùng (hỗ trợ tìm kiếm, lọc theo vai trò, phân trang)
   async findAll(query: FindUsersQueryDto, actorId?: string, actorRole?: Role): Promise<{
-    data: Omit<User, 'passwordHash'>[];
+    data: SanitizedUser<User>[];
     total: number;
     page: number;
     limit: number;
@@ -354,7 +357,7 @@ export class UsersService {
   async createUserByAdmin(
     dto: CreateUserDto,
     actorId?: string,
-  ): Promise<Omit<User, 'passwordHash'>> {
+  ): Promise<SanitizedUser<User>> {
     const actorRole = actorId
       ? await this.assertManagementAuthority(actorId, undefined, dto.role)
       : undefined;
@@ -420,7 +423,7 @@ export class UsersService {
   async updateProfile(
     userId: string,
     updateProfileDto: UpdateProfileDto,
-  ): Promise<Omit<User, 'passwordHash'>> {
+  ): Promise<SanitizedUser<User>> {
     const user = await this.findById(userId);
     if (!user) {
       throw new NotFoundException('Không tìm thấy người dùng!');
@@ -518,7 +521,7 @@ export class UsersService {
     userId: string,
     adminUpdateUserDto: AdminUpdateUserDto,
     actorId?: string,
-  ): Promise<Omit<User, 'passwordHash'>> {
+  ): Promise<SanitizedUser<User>> {
     const actorRole = actorId
       ? await this.assertManagementAuthority(actorId, userId, adminUpdateUserDto.role)
       : undefined;
