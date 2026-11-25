@@ -305,7 +305,7 @@ export class PondsService {
         user: true,
         devices: true,
         thresholdConfigs: true,
-        farmerAssignments: this.assignmentRepo ? { farmer: true } : true,
+        farmerAssignments: { farmer: true },
       },
       order: { createdAt: 'DESC' },
       skip,
@@ -333,7 +333,7 @@ export class PondsService {
         devices: true,
         thresholdConfigs: true,
         manualLogs: true,
-        farmerAssignments: this.assignmentRepo ? { farmer: true } : true,
+        farmerAssignments: { farmer: true },
       },
     });
 

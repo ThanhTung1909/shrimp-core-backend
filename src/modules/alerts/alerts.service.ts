@@ -132,7 +132,10 @@ export class AlertsService {
     }
 
     if (endDate) {
-      qb.andWhere('alert.createdAt <= :endDate', { endDate: new Date(endDate) });
+      const parsedEndDate = /^\d{4}-\d{2}-\d{2}$/.test(endDate)
+        ? new Date(`${endDate}T23:59:59.999Z`)
+        : new Date(endDate);
+      qb.andWhere('alert.createdAt <= :endDate', { endDate: parsedEndDate });
     }
 
     qb.orderBy('alert.createdAt', 'DESC');
