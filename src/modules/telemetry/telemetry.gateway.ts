@@ -18,6 +18,7 @@ import { UsersService } from '../users/users.service.js';
 import { Role } from '../../common/enums/role.enum.js';
 import type { JwtPayload } from '../auth/strategies/jwt.strategy.js';
 import type { Redis } from 'ioredis';
+import { PondNotificationRecipientResolver } from '../ponds/pond-notification-recipient.resolver.js';
 
 export interface TelemetryEventPayload {
   pondId?: string | null;
@@ -50,6 +51,7 @@ export class TelemetryGateway
 
   private readonly logger = new Logger(TelemetryGateway.name);
   private subscriber: Redis | null = null;
+  private readonly adminSubscriptions = new Map<string, { socket: Socket; ponds: Set<string> }>();
 
   constructor(
     private readonly jwtService: JwtService,
@@ -58,6 +60,7 @@ export class TelemetryGateway
     @Inject(forwardRef(() => PondsService))
     private readonly pondsService: PondsService,
     private readonly usersService: UsersService,
+    private readonly recipientResolver: PondNotificationRecipientResolver,
   ) { }
 
   onModuleInit() {
@@ -151,6 +154,7 @@ export class TelemetryGateway
   }
 
   handleDisconnect(client: Socket) {
+    this.adminSubscriptions.delete(client.id);
     const userId = client.data?.userId || 'Khách';
     this.logger.log(`[WS Disconnected] Client ${client.id} (User: ${userId}) đã ngắt kết nối.`);
   }
@@ -176,9 +180,31 @@ export class TelemetryGateway
     }
 
     try {
-      // Phân quyền đầm tôm: Kiểm tra Farmer có quyền truy cập đầm tôm này hay không
+      const current = await this.usersService.findById(user.userId);
+      if (
+        !current ||
+        !current.isActive ||
+        current.role !== user.role ||
+        current.tokenVersion !== user.tokenVersion
+      ) {
+        this.adminSubscriptions.delete(client.id);
+        await client.leave(`pond:${pondId}`);
+        // Disconnect after ACK serialization so stale deactivated/logged-out sockets get the error ACK and close cleanly.
+        if (typeof client.disconnect === 'function') {
+          setImmediate(() => client.disconnect());
+        }
+        throw new Error('Tài khoản hoặc phiên làm việc không còn hợp lệ!');
+      }
+
+      // Phân quyền đầm tôm: Kiểm tra quyền truy cập ao nuôi hiện hành
       await this.pondsService.findPondById(pondId, user.userId, user.role as Role);
       await client.join(`pond:${pondId}`);
+      if (user.role === Role.ADMIN && client.connected !== false) {
+        const entry = this.adminSubscriptions.get(client.id) ?? { socket: client, ponds: new Set<string>() };
+        entry.ponds.add(pondId);
+        entry.ponds.add(pondId.trim().toLowerCase());
+        this.adminSubscriptions.set(client.id, entry);
+      }
 
       this.logger.log(
         `[WS Subscribe] Client ${client.id} (User: ${user.userId}) đã join room: pond:${pondId}`,
@@ -217,6 +243,13 @@ export class TelemetryGateway
     if (!user) {
       client.disconnect();
       return { status: 'error', message: 'Chưa xác thực người dùng' };
+    }
+
+    const adminEntry = this.adminSubscriptions.get(client.id);
+    if (adminEntry) {
+      adminEntry.ponds.delete(pondId);
+      adminEntry.ponds.delete(pondId.trim().toLowerCase());
+      if (adminEntry.ponds.size === 0) this.adminSubscriptions.delete(client.id);
     }
 
     try {
@@ -319,9 +352,9 @@ export class TelemetryGateway
         try {
           const payload = JSON.parse(message);
           if (channel === 'telemetry:new') {
-            this.broadcastTelemetry(payload);
+            void this.broadcastTelemetry(payload);
           } else if (channel === 'alert:triggered') {
-            this.broadcastAlert(payload);
+            void this.broadcastAlert(payload);
           }
         } catch (e: any) {
           this.logger.error(`[Redis Message Error] Lỗi xử lý tin nhắn kênh ${channel}: ${e.message}`);
@@ -336,47 +369,89 @@ export class TelemetryGateway
    * Phát sự kiện telemetry:new xuống các room Socket.IO.
    * Một client thuộc nhiều room chỉ nhận một event.
    */
-  broadcastTelemetry(payload: TelemetryEventPayload) {
-    const { pondId, userId, data } = payload;
-
-    if (!this.server || (!pondId && !userId)) {
-      return;
-    }
-
-    const rooms: string[] = [];
-
-    if (pondId) {
-      rooms.push(`pond:${pondId}`);
-    }
-
-    if (userId) {
-      rooms.push(`user:${userId}`);
-    }
-
-    this.server.to(rooms).emit('telemetry:new', data);
+  async broadcastTelemetry(payload: TelemetryEventPayload) {
+    await this.broadcastAuthorized(payload.pondId, 'telemetry:new', payload.data);
   }
 
   /**
    * Phát sự kiện alert:triggered xuống các room Socket.IO.
    * Một client thuộc nhiều room chỉ nhận một event.
    */
-  broadcastAlert(payload: AlertEventPayload) {
-    const { pondId, userId, alert } = payload;
+  async broadcastAlert(payload: AlertEventPayload) {
+    await this.broadcastAuthorized(payload.pondId, 'alert:triggered', payload.alert);
+  }
 
-    if (!this.server || (!pondId && !userId)) {
-      return;
+  private async broadcastAuthorized(pondId: string | null | undefined, event: string, data: unknown) {
+    if (!this.server || !pondId) return;
+    const normalizedPondId = pondId.trim().toLowerCase();
+
+    // 1. Deliver to authorized FARMER / MANAGER recipients via private user rooms
+    try {
+      const resolved = await this.recipientResolver.resolve(pondId);
+      const localSockets = (this.server as unknown as { sockets?: Map<string, Socket> }).sockets;
+      if (localSockets instanceof Map) {
+        // A user room can contain an old JWT session after tokenVersion changes.
+        // Check every local socket before emitting; Redis delivers this event to
+        // each gateway, so no remote socket needs to be emitted here.
+        const allowedIds = new Set(resolved?.recipients.map((recipient) => recipient.userId) ?? []);
+        const identities = new Map<string, Promise<Awaited<ReturnType<UsersService['findById']>>>>();
+        const roomIndex = (this.server as unknown as { adapter?: { rooms?: Map<string, Set<string>> } }).adapter?.rooms;
+        const candidateSockets = roomIndex instanceof Map
+          ? [...new Set([...allowedIds].flatMap((id) => [...(roomIndex.get(`user:${id}`) ?? [])]))]
+            .map((id) => localSockets.get(id)).filter((socket): socket is Socket => Boolean(socket))
+          : [...localSockets.values()];
+        await Promise.all(candidateSockets.map(async (socket) => {
+          const authenticated = socket.data?.user;
+          if (!authenticated?.userId || !allowedIds.has(authenticated.userId) ||
+              !socket.rooms.has(`user:${authenticated.userId}`) || socket.connected === false) return;
+          let lookup = identities.get(authenticated.userId);
+          if (!lookup) {
+            lookup = this.usersService.findById(authenticated.userId);
+            identities.set(authenticated.userId, lookup);
+          }
+          try {
+            const current = await lookup;
+            if (current?.isActive && current.role === authenticated.role &&
+                current.tokenVersion === authenticated.tokenVersion) socket.emit(event, data);
+          } catch {
+            this.logger.warn('[WS] Recipient authorization lookup failed; event not emitted.');
+          }
+        }));
+      } else {
+        this.logger.error('[WS] Local socket registry unavailable; protected event not emitted.');
+      }
+    } catch {
+      this.logger.error('[WS] Recipient resolution failed; farmer/manager events not emitted.');
     }
 
-    const rooms: string[] = [];
-
-    if (pondId) {
-      rooms.push(`pond:${pondId}`);
+    // 2. Deliver to ADMINs subscribed to this pond on their verified sockets
+    try {
+      const admins = [...this.adminSubscriptions.values()].filter(
+        (entry) => entry.ponds.has(pondId) || entry.ponds.has(normalizedPondId),
+      );
+      const identities = new Map<string, Promise<Awaited<ReturnType<UsersService['findById']>>>>();
+      await Promise.all(admins.map(async (entry) => {
+        const authenticated = entry.socket.data?.user;
+        if (!authenticated?.userId || entry.socket.connected === false) return;
+        let lookup = identities.get(authenticated.userId);
+        if (!lookup) {
+          lookup = this.usersService.findById(authenticated.userId);
+          identities.set(authenticated.userId, lookup);
+        }
+        try {
+          const current = await lookup;
+          if (current?.isActive && current.role === Role.ADMIN && current.tokenVersion === authenticated.tokenVersion &&
+              this.adminSubscriptions.get(entry.socket.id) === entry &&
+              (entry.ponds.has(pondId) || entry.ponds.has(normalizedPondId))) {
+            entry.socket.emit(event, data);
+            this.logger.log(`[WS] Emitted ${event} to ADMIN socket ${entry.socket.id} for pond ${pondId}`);
+          }
+        } catch {
+          this.logger.warn('[WS] ADMIN authorization lookup failed; event not emitted.');
+        }
+      }));
+    } catch {
+      this.logger.error('[WS] ADMIN event delivery failed; event not emitted.');
     }
-
-    if (userId) {
-      rooms.push(`user:${userId}`);
-    }
-
-    this.server.to(rooms).emit('alert:triggered', alert);
   }
 }

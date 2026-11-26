@@ -21,6 +21,7 @@ import { NotificationQueueService } from './notification-queue.service.js';
 import { NotificationQueueProcessor } from './notification.processor.js';
 import { AlertNotificationListener } from './alert-notification.listener.js';
 import { isHttpOnlyMode } from '../../common/runtime/http-only-mode.js';
+import { PondsModule } from '../ponds/ponds.module.js';
 
 const httpOnlyMode = isHttpOnlyMode();
 
@@ -30,6 +31,7 @@ const httpOnlyMode = isHttpOnlyMode();
     EmailModule,
     EsmsModule,
     RedisModule,
+    PondsModule,
     ...(!httpOnlyMode ? [BullModule.registerQueue({
       name: QUEUE_NOTIFICATIONS,
     })] : []),

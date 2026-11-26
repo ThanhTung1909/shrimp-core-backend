@@ -93,9 +93,7 @@ export class PondsService {
   ): Promise<void> {
     if (currentUserRole === Role.ADMIN) return;
     if (currentUserRole === Role.MANAGER) {
-      if (!this.farmRepo) return;
-      if (pond.userId === currentUserId) return;
-      if (pond.farmId) {
+      if (this.farmRepo && pond.farmId) {
         const farm = await this.farmRepo.findOneBy({ farmId: pond.farmId });
         if (farm && farm.ownerId === currentUserId) return;
       }

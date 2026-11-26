@@ -8,11 +8,12 @@ import { PondsService } from './ponds.service.js';
 import { Farm } from '../farms/entities/farm.entity.js';
 import { User } from '../users/entities/user.entity.js';
 import { PondFarmerAssignment } from './entities/pond-farmer-assignment.entity.js';
+import { PondNotificationRecipientResolver } from './pond-notification-recipient.resolver.js';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Pond, ThresholdConfig, ManualTestLog, Farm, User, PondFarmerAssignment])],
   controllers: [PondsController],
-  providers: [PondsService],
-  exports: [PondsService, TypeOrmModule],
+  providers: [PondsService, PondNotificationRecipientResolver],
+  exports: [PondsService, PondNotificationRecipientResolver, TypeOrmModule],
 })
 export class PondsModule {}
