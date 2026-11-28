@@ -2,6 +2,8 @@ import { Injectable, Logger, InternalServerErrorException } from '@nestjs/common
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 
+export class ConfirmedSmsRejectionError extends Error {}
+
 @Injectable()
 export class EsmsService {
   private readonly logger = new Logger(EsmsService.name);
@@ -221,12 +223,13 @@ export class EsmsService {
       if (data.CodeResult !== '100') {
         const errorMsg = `eSMS rejected the alert request (code ${data.CodeResult})`;
         this.logger.error(errorMsg);
-        throw new InternalServerErrorException(errorMsg);
+        throw new ConfirmedSmsRejectionError(errorMsg);
       }
 
       this.logger.log('eSMS accepted the alert delivery request');
       return data;
-    } catch {
+    } catch (error) {
+      if (error instanceof ConfirmedSmsRejectionError) throw error;
       this.logger.error('Unable to send alert SMS through eSMS');
       throw new InternalServerErrorException(
         'Không thể kết nối đến hệ thống gửi SMS',

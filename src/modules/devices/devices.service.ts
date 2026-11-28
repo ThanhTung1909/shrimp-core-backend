@@ -49,6 +49,37 @@ export class DevicesService {
     private readonly alertRepo: Repository<Alert>,
   ) {}
 
+  private assertSupportedRole(role: Role): void {
+    if (role !== Role.ADMIN && role !== Role.MANAGER && role !== Role.FARMER) {
+      throw new ForbiddenException('Vai trò người dùng không được phép truy cập thiết bị!');
+    }
+  }
+
+  private async assertManagerOwnsPond(
+    pond: Pond,
+    currentUserId: string,
+    message: string,
+  ): Promise<void> {
+    if (!pond.farmId) {
+      throw new ForbiddenException(message);
+    }
+
+    const farm = pond.farm ?? await this.farmRepo.findOneBy({ farmId: pond.farmId });
+    if (!farm || farm.ownerId !== currentUserId) {
+      throw new ForbiddenException(message);
+    }
+  }
+
+  private async assertFarmerAssignedToPond(
+    pondId: string | null | undefined,
+    currentUserId: string,
+    message: string,
+  ): Promise<void> {
+    if (!pondId || !await this.assignmentRepo.exist({ where: { pondId, farmerId: currentUserId } })) {
+      throw new ForbiddenException(message);
+    }
+  }
+
   /**
    * Đăng ký thiết bị IoT mới
    * - ADMIN: toàn quyền đăng ký thiết bị (có thể gắn hoặc chưa gắn vào ao)
@@ -60,6 +91,7 @@ export class DevicesService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<Device> {
+    this.assertSupportedRole(currentUserRole);
     if (currentUserRole === Role.FARMER) {
       throw new ForbiddenException(
         'Nông dân chỉ có quyền xem dữ liệu thiết bị và báo cáo thiết bị hỏng!',
@@ -90,20 +122,11 @@ export class DevicesService {
       if (!pond) {
         throw new NotFoundException(`Không tìm thấy ao nuôi với ID: ${dto.pondId}`);
       }
-      let isManagerFarm =
-        (pond.farm && pond.farm.ownerId === currentUserId) ||
-        pond.userId === currentUserId;
-      if (!isManagerFarm && pond.farmId) {
-        const farm = await this.farmRepo.findOneBy({ farmId: pond.farmId });
-        if (farm && farm.ownerId === currentUserId) {
-          isManagerFarm = true;
-        }
-      }
-      if (!isManagerFarm) {
-        throw new ForbiddenException(
-          'Quản lý chỉ được tạo thiết bị thuộc các ao nuôi trong các trang trại do mình quản lý!',
-        );
-      }
+      await this.assertManagerOwnsPond(
+        pond,
+        currentUserId,
+        'Quản lý chỉ được tạo thiết bị thuộc các ao nuôi trong các trang trại do mình quản lý!',
+      );
     } else if (dto.pondId) {
       const pond = await this.pondRepo.findOne({
         where: { pondId: dto.pondId },
@@ -133,6 +156,7 @@ export class DevicesService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<PaginatedDevicesResult> {
+    this.assertSupportedRole(currentUserRole);
     const { page = 1, limit = 10, search, pondId, status } = query;
     const skip = (page - 1) * limit;
 
@@ -143,14 +167,14 @@ export class DevicesService {
     if (currentUserRole === Role.FARMER) {
       qb.innerJoin('device.pond', 'farmerPond');
       qb.andWhere(
-        '(farmerPond.user_id = :currentUserId OR EXISTS (SELECT 1 FROM pond_farmer_assignments pfa WHERE pfa.pond_id = farmerPond.pond_id AND pfa.farmer_id = :currentUserId))',
+        'EXISTS (SELECT 1 FROM pond_farmer_assignments pfa WHERE pfa.pond_id = farmerPond.pond_id AND pfa.farmer_id = :currentUserId)',
         { currentUserId },
       );
     } else if (currentUserRole === Role.MANAGER) {
       qb.innerJoin('device.pond', 'managerPond');
       qb.leftJoin('managerPond.farm', 'mFarm');
       qb.andWhere(
-        '(mFarm.owner_id = :currentUserId OR managerPond.user_id = :currentUserId)',
+        'mFarm.owner_id = :currentUserId',
         { currentUserId },
       );
     }
@@ -193,6 +217,7 @@ export class DevicesService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<Device> {
+    this.assertSupportedRole(currentUserRole);
     const device = await this.deviceRepo.findOne({
       where: { deviceId },
       relations: {
@@ -210,36 +235,22 @@ export class DevicesService {
       if (!device.pondId || !device.pond) {
         throw new ForbiddenException('Bạn không có quyền truy cập thiết bị này!');
       }
-      const isOwner = device.pond.userId === currentUserId;
-      let isAssigned = isOwner;
-      if (!isAssigned) {
-        isAssigned = await this.assignmentRepo.exist({
-          where: { pondId: device.pond.pondId, farmerId: currentUserId },
-        });
-      }
-      if (!isAssigned) {
-        throw new ForbiddenException('Bạn không có quyền truy cập thiết bị này!');
-      }
+      await this.assertFarmerAssignedToPond(
+        device.pond.pondId,
+        currentUserId,
+        'Bạn không có quyền truy cập thiết bị này!',
+      );
     } else if (currentUserRole === Role.MANAGER) {
       if (!device.pondId || !device.pond) {
         throw new ForbiddenException(
           'Quản lý chỉ được quyền quản lý các thiết bị thuộc các ao nuôi trong các trang trại do mình quản lý!',
         );
       }
-      let isManagerFarm =
-        (device.pond.farm && device.pond.farm.ownerId === currentUserId) ||
-        device.pond.userId === currentUserId;
-      if (!isManagerFarm && device.pond.farmId) {
-        const farm = await this.farmRepo.findOneBy({ farmId: device.pond.farmId });
-        if (farm && farm.ownerId === currentUserId) {
-          isManagerFarm = true;
-        }
-      }
-      if (!isManagerFarm) {
-        throw new ForbiddenException(
-          'Quản lý chỉ được quyền quản lý các thiết bị thuộc các ao nuôi trong các trang trại do mình quản lý!',
-        );
-      }
+      await this.assertManagerOwnsPond(
+        device.pond,
+        currentUserId,
+        'Quản lý chỉ được quyền quản lý các thiết bị thuộc các ao nuôi trong các trang trại do mình quản lý!',
+      );
     }
 
     return device;
@@ -257,6 +268,7 @@ export class DevicesService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<Device> {
+    this.assertSupportedRole(currentUserRole);
     if (currentUserRole === Role.FARMER) {
       throw new ForbiddenException(
         'Nông dân chỉ có quyền xem dữ liệu thiết bị và báo cáo thiết bị hỏng!',
@@ -293,20 +305,11 @@ export class DevicesService {
       }
 
       if (currentUserRole === Role.MANAGER) {
-        let isManagerFarm =
-          (newPond.farm && newPond.farm.ownerId === currentUserId) ||
-          newPond.userId === currentUserId;
-        if (!isManagerFarm && newPond.farmId) {
-          const farm = await this.farmRepo.findOneBy({ farmId: newPond.farmId });
-          if (farm && farm.ownerId === currentUserId) {
-            isManagerFarm = true;
-          }
-        }
-        if (!isManagerFarm) {
-          throw new ForbiddenException(
-            'Quản lý chỉ được chuyển thiết bị sang các ao nuôi trong trang trại do mình quản lý!',
-          );
-        }
+        await this.assertManagerOwnsPond(
+          newPond,
+          currentUserId,
+          'Quản lý chỉ được chuyển thiết bị sang các ao nuôi trong trang trại do mình quản lý!',
+        );
       }
       device.pondId = dto.pondId;
     }
@@ -333,6 +336,7 @@ export class DevicesService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<Device> {
+    this.assertSupportedRole(currentUserRole);
     if (currentUserRole === Role.FARMER) {
       throw new ForbiddenException(
         'Nông dân không có quyền gán hoặc tháo thiết bị!',
@@ -357,20 +361,11 @@ export class DevicesService {
       }
 
       if (currentUserRole === Role.MANAGER) {
-        let isManagerFarm =
-          (pond.farm && pond.farm.ownerId === currentUserId) ||
-          pond.userId === currentUserId;
-        if (!isManagerFarm && pond.farmId) {
-          const farm = await this.farmRepo.findOneBy({ farmId: pond.farmId });
-          if (farm && farm.ownerId === currentUserId) {
-            isManagerFarm = true;
-          }
-        }
-        if (!isManagerFarm) {
-          throw new ForbiddenException(
-            'Quản lý chỉ được gán thiết bị vào các ao nuôi thuộc trang trại do mình quản lý!',
-          );
-        }
+        await this.assertManagerOwnsPond(
+          pond,
+          currentUserId,
+          'Quản lý chỉ được gán thiết bị vào các ao nuôi thuộc trang trại do mình quản lý!',
+        );
       }
       device.pondId = assignPondDto.pondId;
     } else {
@@ -396,6 +391,7 @@ export class DevicesService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<Device> {
+    this.assertSupportedRole(currentUserRole);
     if (currentUserRole === Role.FARMER) {
       throw new ForbiddenException(
         'Nông dân chỉ có quyền báo cáo thiết bị hỏng qua chức năng Báo hỏng!',
@@ -423,6 +419,7 @@ export class DevicesService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<Device> {
+    this.assertSupportedRole(currentUserRole);
     const device = await this.findDeviceById(
       deviceId,
       currentUserId,
@@ -464,6 +461,7 @@ export class DevicesService {
     currentUserId: string,
     currentUserRole: Role,
   ): Promise<{ message: string }> {
+    this.assertSupportedRole(currentUserRole);
     if (currentUserRole === Role.FARMER) {
       throw new ForbiddenException(
         'Nông dân không có quyền xóa thiết bị!',

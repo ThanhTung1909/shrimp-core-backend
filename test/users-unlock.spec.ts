@@ -39,7 +39,17 @@ describe('Manual unlock authorization and durable lock preservation', () => {
         return result;
       }),
     };
-    users = new UsersService({} as any, lockout);
+    const managerScopeQueryBuilder = {
+      innerJoin: vi.fn().mockReturnThis(),
+      leftJoin: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      andWhere: vi.fn().mockReturnThis(),
+      getExists: vi.fn().mockResolvedValue(true),
+    };
+    const pondRepository = {
+      createQueryBuilder: vi.fn(() => managerScopeQueryBuilder),
+    };
+    users = new UsersService({} as any, lockout, pondRepository as any);
     logSpy = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
   });
 

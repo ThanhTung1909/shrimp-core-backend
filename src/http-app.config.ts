@@ -6,11 +6,16 @@ import {
 import { Reflector } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
+import type { NextFunction, Request, Response } from 'express';
 
 import { AllExceptionsFilter } from './common/filters/http-exception.filter.js';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor.js';
 import { createSwaggerRateLimitMiddleware } from './common/middleware/swagger-rate-limit.middleware.js';
 import { RateLimitService } from './common/redis/rate-limit.service.js';
+import {
+  isHttpOnlyMode,
+  isReadOnlyHttpMethod,
+} from './common/runtime/http-only-mode.js';
 
 /**
  * Applies HTTP middleware before Nest starts listening for requests.
@@ -55,11 +60,24 @@ export function configureHttpApp(app: INestApplication): void {
     }),
   );
 
-  const swaggerRateLimitMiddleware = createSwaggerRateLimitMiddleware(
-    rateLimitService,
-  );
-  app.use('/api/docs', swaggerRateLimitMiddleware);
-  app.use('/api/docs-json', swaggerRateLimitMiddleware);
+  if (isHttpOnlyMode()) {
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      if (isReadOnlyHttpMethod(req.method)) return next();
+      res.setHeader('Allow', 'GET, HEAD, OPTIONS');
+      return res.status(405).json({
+        statusCode: 405,
+        message: 'HTTP-only mode permits GET, HEAD and OPTIONS requests only.',
+      });
+    });
+  }
+
+  if (!isHttpOnlyMode()) {
+    const swaggerRateLimitMiddleware = createSwaggerRateLimitMiddleware(
+      rateLimitService,
+    );
+    app.use('/api/docs', swaggerRateLimitMiddleware);
+    app.use('/api/docs-json', swaggerRateLimitMiddleware);
+  }
 
   app.enableCors();
   app.useGlobalFilters(new AllExceptionsFilter());

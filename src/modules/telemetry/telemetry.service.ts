@@ -21,6 +21,7 @@ import { AlertsService } from '../alerts/alerts.service.js';
 import { RedisService } from '../../common/redis/redis.service.js';
 import { PondsService } from '../ponds/ponds.service.js';
 import { Role } from '../../common/enums/role.enum.js';
+import { isHttpOnlyMode } from '../../common/runtime/http-only-mode.js';
 
 const THRESHOLD_COOLDOWN_SECONDS = 15 * 60;
 const THRESHOLD_METRICS = [
@@ -54,9 +55,8 @@ export class TelemetryService implements OnModuleInit {
   ) {}
 
   /**
-   * Human HTTP readers must be authorized against the owning pond before a
-   * device ID can be used to fetch telemetry. MQTT/device ingestion bypasses
-   * this method and continues to use its own broker/device trust boundary.
+   * HTTP readers are authorized against the device's pond before any telemetry
+   * query. MQTT ingestion deliberately remains on its device/broker boundary.
    */
   async assertDeviceReadAccess(
     deviceId: string,
@@ -83,6 +83,10 @@ export class TelemetryService implements OnModuleInit {
   }
 
   async onModuleInit() {
+    if (isHttpOnlyMode()) {
+      this.logger.log('[HTTP-only] Bỏ qua TimescaleDB startup initialization.');
+      return;
+    }
     await this.ensureTimescaleDbConfig();
   }
 
