@@ -17,16 +17,23 @@ import { QueueModule } from './common/queues/queue.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { FarmsModule } from './modules/farms/farms.module.js';
 import { CropsModule } from './modules/crops/crops.module.js';
+import { AiRiskAlertsModule } from './modules/ai-risk-alerts/ai-risk-alerts.module.js';
 
 import { ScheduleModule } from '@nestjs/schedule';
 import { EsmsModule } from './common/esms/esms.module.js';
 import { HttpThrottlerGuard } from './common/guards/http-throttler.guard.js';
+import {
+  createDatabaseStartupOptions,
+  isHttpOnlyMode,
+} from './common/runtime/http-only-mode.js';
+
+const httpOnlyMode = isHttpOnlyMode();
 
 @Module({
   imports: [
     // Load biến môi trường toàn cục
     ConfigModule.forRoot({ isGlobal: true }),
-    ThrottlerModule.forRootAsync({
+    ...(!httpOnlyMode ? [ThrottlerModule.forRootAsync({
       imports: [RedisModule],
       inject: [RedisService],
       useFactory: (redisService: RedisService) => ({
@@ -38,23 +45,15 @@ import { HttpThrottlerGuard } from './common/guards/http-throttler.guard.js';
         ],
         storage: new RedisThrottlerStorage(redisService),
       }),
-    }),
-    ScheduleModule.forRoot(),
+    })] : []),
+    ...(!httpOnlyMode ? [ScheduleModule.forRoot()] : []),
 
     // Kết nối CSDL TimescaleDB
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        type: 'postgres',
-        host: config.get<string>('DB_HOST'),
-        port: config.get<number>('DB_PORT'),
-        username: config.get<string>('DB_USER'),
-        password: config.get<string>('DB_PASS'),
-        database: config.get<string>('DB_NAME'),
-        autoLoadEntities: true,
-        synchronize: config.get<string>('DB_SYNCHRONIZE') === 'true',
-      }),
+      useFactory: (config: ConfigService) =>
+        createDatabaseStartupOptions(config, httpOnlyMode),
     }),
 
     // Module xác thực và phân quyền
@@ -64,7 +63,7 @@ import { HttpThrottlerGuard } from './common/guards/http-throttler.guard.js';
     RedisModule,
 
     // Module Message Queue BullMQ (Redis Streams)
-    QueueModule,
+    ...(!httpOnlyMode ? [QueueModule] : []),
     // Module SMS (Global)
     EsmsModule,
 
@@ -78,17 +77,15 @@ import { HttpThrottlerGuard } from './common/guards/http-throttler.guard.js';
     CropsModule,
     DevicesModule,
     AlertsModule,
+    AiRiskAlertsModule,
     PredictionsModule,
 
     // Module quản lý dữ liệu cảm biến chuỗi thời gian
     TelemetryModule,
   ],
   controllers: [],
-  providers: [
-    {
-      provide: APP_GUARD,
-      useClass: HttpThrottlerGuard,
-    },
-  ],
+  providers: !httpOnlyMode
+    ? [{ provide: APP_GUARD, useClass: HttpThrottlerGuard }]
+    : [],
 })
 export class AppModule { }

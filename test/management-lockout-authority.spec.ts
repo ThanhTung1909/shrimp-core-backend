@@ -167,8 +167,10 @@ describe('P0-3 management authority cannot bypass manual unlock hierarchy', () =
     expect(repo.update).toHaveBeenCalledWith({ userId: targetId }, expect.objectContaining({ role: Role.ADMIN }));
     const patch = repo.update.mock.calls[0][1];
     expect(patch).not.toHaveProperty('isLocked');
-        expect(result.isLocked).toBe(true);
-    expect(result.tokenVersion).toBe(12);
+    expect(store.get(targetId)?.isLocked).toBe(true);
+    expect(store.get(targetId)?.tokenVersion).toBe(12);
+    expect(result).not.toHaveProperty('isLocked');
+    expect(result).not.toHaveProperty('tokenVersion');
   });
 
   it('ADMIN can create ADMIN accounts using current database authority', async () => {
@@ -190,9 +192,10 @@ describe('P0-3 management authority cannot bypass manual unlock hierarchy', () =
     expect(criteria.role.value).toBe(Role.ADMIN);
     expect(typeof patch.tokenVersion).toBe('function');
     expect(patch.tokenVersion()).toBe('"token_version" + 1');
-    expect(result.tokenVersion).toBe(12);
+    expect(store.get(targetId)?.tokenVersion).toBe(12);
+    expect(result).not.toHaveProperty('tokenVersion');
     expect(patch).not.toHaveProperty('isLocked');
-      });
+  });
 
   it('rejects with Forbidden if a MANAGER update target became ADMIN after the authority lookup', async () => {
     repo.update.mockResolvedValueOnce({ affected: 0 });

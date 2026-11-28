@@ -231,7 +231,7 @@ describe('DevicesService', () => {
         'farmerPond',
       );
       expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
-        expect.stringContaining('farmerPond.user_id = :currentUserId'),
+        expect.stringContaining('EXISTS (SELECT 1 FROM pond_farmer_assignments'),
         { currentUserId: farmerId },
       );
     });
@@ -338,6 +338,33 @@ describe('DevicesService', () => {
         service.findDeviceById(deviceId, farmerId, Role.FARMER),
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
+
+    it('từ chối FARMER là legacy pond owner nhưng không có assignment', async () => {
+      mockDeviceRepo.findOne.mockResolvedValue({
+        deviceId,
+        pondId,
+        pond: { pondId, userId: farmerId },
+      });
+      mockAssignmentRepo.exist.mockResolvedValue(false);
+
+      await expect(
+        service.findDeviceById(deviceId, farmerId, Role.FARMER),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('mất quyền truy cập ngay khi assignment bị thu hồi', async () => {
+      mockDeviceRepo.findOne.mockResolvedValue({
+        deviceId,
+        pondId,
+        pond: { pondId, userId: otherFarmerId },
+      });
+      mockAssignmentRepo.exist
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+
+      await expect(service.findDeviceById(deviceId, farmerId, Role.FARMER)).resolves.toBeDefined();
+      await expect(service.findDeviceById(deviceId, farmerId, Role.FARMER)).rejects.toBeInstanceOf(ForbiddenException);
+    });
   });
 
   describe('updateDevice', () => {
@@ -353,7 +380,7 @@ describe('DevicesService', () => {
         pondId,
         deviceName: 'Cũ',
         macAddress: 'AA:BB:CC:DD:EE:01',
-        pond: { pondId, farm: { farmId, ownerId: managerId } },
+        pond: { pondId, farmId, farm: { farmId, ownerId: managerId } },
       };
       mockDeviceRepo.findOne.mockResolvedValue(device);
 
@@ -397,6 +424,7 @@ describe('DevicesService', () => {
         pond: { pondId, userId: farmerId },
       };
       mockDeviceRepo.findOne.mockResolvedValue(device);
+      mockAssignmentRepo.exist.mockResolvedValue(true);
 
       const result = await service.reportFault(
         deviceId,
@@ -431,7 +459,7 @@ describe('DevicesService', () => {
       const device = {
         deviceId,
         pondId,
-        pond: { pondId, farm: { farmId, ownerId: managerId } },
+        pond: { pondId, farmId, farm: { farmId, ownerId: managerId } },
       };
       mockDeviceRepo.findOne.mockResolvedValue(device);
 

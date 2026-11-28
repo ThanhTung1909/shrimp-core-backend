@@ -15,7 +15,14 @@ import { AlertStatus } from '../src/common/enums/alert-status.enum.js';
 import { RiskLevel } from '../src/common/enums/risk-level.enum.js';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
-describe('Full ERD Entities Integration Test (Alert, AiRecommendation, AiPrediction, ManualTestLog)', () => {
+const TEST_DATABASE = 'shrimp_all_entities_e2e';
+const runDatabaseIntegration =
+  process.env.AQS_ALL_ENTITIES_E2E === 'true' &&
+  process.env.DB_NAME === TEST_DATABASE &&
+  ['127.0.0.1', 'localhost'].includes(process.env.DB_HOST ?? '');
+const databaseDescribe = runDatabaseIntegration ? describe : describe.skip;
+
+databaseDescribe('Full ERD Entities Integration Test (Alert, AiRecommendation, AiPrediction, ManualTestLog)', () => {
   let moduleRef: TestingModule;
   let userRepo: Repository<User>;
   let pondRepo: Repository<Pond>;

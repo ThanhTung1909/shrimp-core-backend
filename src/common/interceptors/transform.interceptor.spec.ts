@@ -109,6 +109,29 @@ describe('TransformInterceptor', () => {
     });
   });
 
+  it('should preserve resData.message inside data when @ResponseMessage decorator is set', async () => {
+    vi.spyOn(reflector, 'getAllAndOverride').mockImplementation((key) => {
+      if (key === RESPONSE_MESSAGE_KEY) return 'Đã giải quyết cảnh báo thành công';
+      return undefined;
+    });
+
+    const responseData = { alertId: 'a1', message: 'DO low' };
+    mockCallHandler = {
+      handle: () => of(responseData),
+    };
+
+    const result$ = interceptor.intercept(mockExecutionContext, mockCallHandler);
+
+    result$.subscribe((result) => {
+      expect(result).toEqual({
+        success: true,
+        statusCode: 200,
+        message: 'Đã giải quyết cảnh báo thành công',
+        data: { alertId: 'a1', message: 'DO low' },
+      });
+    });
+  });
+
   it('should skip transformation when @SkipTransform decorator is present', async () => {
     vi.spyOn(reflector, 'getAllAndOverride').mockImplementation((key) => {
       if (key === SKIP_TRANSFORM_KEY) return true;
