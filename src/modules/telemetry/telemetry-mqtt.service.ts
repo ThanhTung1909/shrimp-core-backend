@@ -6,6 +6,7 @@ import { validate } from 'class-validator';
 import { TelemetryService } from './telemetry.service.js';
 import { CreateTelemetryDto } from './dto/create-telemetry.dto.js';
 import { DeviceStatusMqttDto } from './dto/device-status-mqtt.dto.js';
+import { isHttpOnlyMode } from '../../common/runtime/http-only-mode.js';
 
 @Injectable()
 export class TelemetryMqttService implements OnModuleInit, OnModuleDestroy {
@@ -26,6 +27,10 @@ export class TelemetryMqttService implements OnModuleInit, OnModuleDestroy {
   ) { }
 
   onModuleInit() {
+    if (isHttpOnlyMode()) {
+      this.logger.log('[HTTP-only] MQTT subscriber is disabled.');
+      return;
+    }
     this.connectAndSubscribe();
   }
 

@@ -5,6 +5,7 @@ import * as adminApp from 'firebase-admin/app';
 import * as adminMessaging from 'firebase-admin/messaging';
 import { NotificationTokensService } from './notification-tokens.service.js';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { HTTP_ONLY_MODE_ENV } from '../../common/runtime/http-only-mode.js';
 
 vi.mock('firebase-admin/app', () => ({
   initializeApp: vi.fn(),
@@ -24,6 +25,7 @@ describe('FcmService & FCM Security (Scenarios 1 - 6)', () => {
   let tokensService: NotificationTokensService;
   let mockTokenRepo: any;
   let mockUserRepo: any;
+  const originalHttpOnlyMode = process.env[HTTP_ONLY_MODE_ENV];
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -62,6 +64,21 @@ describe('FcmService & FCM Security (Scenarios 1 - 6)', () => {
     };
 
     tokensService = new NotificationTokensService(mockTokenRepo, mockUserRepo);
+  });
+
+  afterEach(() => {
+    if (originalHttpOnlyMode === undefined) delete process.env[HTTP_ONLY_MODE_ENV];
+    else process.env[HTTP_ONLY_MODE_ENV] = originalHttpOnlyMode;
+  });
+
+  it('does not initialize the FCM SDK in HTTP-only mode', () => {
+    process.env[HTTP_ONLY_MODE_ENV] = 'true';
+    vi.clearAllMocks();
+
+    fcmService.onModuleInit();
+
+    expect(adminApp.initializeApp).not.toHaveBeenCalled();
+    expect(fcmService.getStatus()).toBe('FCM_RUNTIME_BLOCKED');
   });
 
   // Scenario 1: Send success

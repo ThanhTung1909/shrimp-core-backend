@@ -7,13 +7,14 @@ import { NotificationChannel } from './enums/notification-channel.enum.js';
 import { DeliveryStatus } from './enums/delivery-status.enum.js';
 import { NotificationPreferencesService } from './notification-preferences.service.js';
 import { NotificationTokensService } from './notification-tokens.service.js';
-import { FcmService } from './fcm.service.js';
-import { EsmsService } from '../../common/esms/esms.service.js';
-import { EmailService } from '../email/email.service.js';
+import { FcmService, type FcmMulticastResult } from './fcm.service.js';
+import { ConfirmedSmsRejectionError, EsmsService } from '../../common/esms/esms.service.js';
+import { ConfirmedEmailRejectionError, EmailService } from '../email/email.service.js';
 import { Pond } from '../ponds/entities/pond.entity.js';
 import { User } from '../users/entities/user.entity.js';
 import { Alert } from '../alerts/entities/alert.entity.js';
 import { QueryNotificationHistoryDto } from './dto/query-history.dto.js';
+import { PondNotificationRecipientResolver } from '../ponds/pond-notification-recipient.resolver.js';
 
 export interface AlertDispatchPayload {
   alertId: string;
@@ -45,6 +46,7 @@ export class NotificationDispatcherService {
     private readonly emailService: EmailService,
     @Optional()
     private readonly configService?: ConfigService,
+    private readonly recipientResolver?: PondNotificationRecipientResolver,
   ) {}
 
   private notificationsEnabled(): boolean {
@@ -66,35 +68,12 @@ export class NotificationDispatcherService {
     try {
       this.logger.log(`[Dispatcher] Processing ${alert.alertLevel} alert.`);
 
-      // 1. Resolve Recipient qua Ao nuôi (Pond) -> Chủ ao (User)
-      const pond = await this.pondRepo.findOne({
-        where: { pondId: alert.pondId },
-        relations: ['user'],
-      });
-
-      if (!pond) {
+      const resolved = await this.recipientResolver?.resolve(alert.pondId);
+      if (!resolved) {
         this.logger.warn('[Dispatcher] Alert pond not found. Skipping notification dispatch.');
         return;
       }
-
-      let resolvedUser = pond.user;
-      if (!resolvedUser && pond.userId) {
-        resolvedUser = (await this.userRepo.findOne({
-          where: { userId: pond.userId },
-        })) as User;
-      }
-
-      if (!resolvedUser) {
-        this.logger.warn('[Dispatcher] Alert owner not found. Skipping notification dispatch.');
-        return;
-      }
-      const user: User = resolvedUser;
-
-      // Scenario 35: Inactive user excluded
-      if (user.isActive === false) {
-        this.logger.warn('[Dispatcher] Alert owner is inactive. Dispatch aborted.');
-        return;
-      }
+      const { pond, recipients } = resolved;
 
       // 2. Chuẩn bị danh sách các kênh cần gửi
       const channels = [
@@ -104,9 +83,9 @@ export class NotificationDispatcherService {
       ];
 
       // Dispatch song song đến các kênh với error isolation
-      const channelPromises = channels.map((channel) =>
+      const channelPromises = recipients.flatMap((user) => channels.map((channel) =>
         this.dispatchChannel(channel, alert, pond, user),
-      );
+      ));
 
       await Promise.allSettled(channelPromises);
       this.logger.log('[Dispatcher] Completed multi-channel dispatch.');
@@ -190,7 +169,8 @@ export class NotificationDispatcherService {
       // Scenario 31: Already sent channel not resent
       if (
         delivery.status === DeliveryStatus.PROVIDER_ACCEPTED ||
-        delivery.status === DeliveryStatus.SENT
+        delivery.status === DeliveryStatus.SENT ||
+        delivery.status === DeliveryStatus.SKIPPED
       ) {
         this.logger.debug(
           `[Dispatcher] Channel ${channel} was already accepted by the provider. Skipping.`,
@@ -217,28 +197,46 @@ export class NotificationDispatcherService {
         return;
       }
 
-      // Increment attempt count for retry
+      // Conditional claim prevents concurrent retries from both sending.
+      const claim = await this.deliveryRepo.createQueryBuilder()
+        .update(NotificationDelivery)
+        .set({ status: DeliveryStatus.PROCESSING, attemptCount: () => 'attempt_count + 1', lastAttemptAt: new Date() })
+        .where('delivery_id = :id AND status = :status AND attempt_count = :attempt', {
+          id: delivery.deliveryId, status: delivery.status, attempt: delivery.attemptCount,
+        }).execute();
+      if (claim.affected !== 1) return;
       delivery.status = DeliveryStatus.PROCESSING;
       delivery.attemptCount += 1;
-      delivery.lastAttemptAt = new Date();
-      await this.deliveryRepo.save(delivery);
     }
 
     // 3. Thực thi gửi theo từng channel
     try {
+      const current = await this.recipientResolver?.resolve(pond.pondId, user.userId);
+      const authorized = current?.recipients.find((recipient) => recipient.userId === user.userId);
+      if (!authorized || !(await this.preferencesService.isChannelEnabled(user.userId, alertLevel, channel))) {
+        delivery.status = DeliveryStatus.SKIPPED;
+        delivery.failureCode = 'RECIPIENT_NOT_ELIGIBLE';
+        await this.deliveryRepo.save(delivery);
+        return;
+      }
       switch (channel) {
         case NotificationChannel.FCM:
-          await this.executeFcmDispatch(delivery, alert, pond, user);
+          await this.executeFcmDispatch(delivery, alert, pond, authorized);
           break;
         case NotificationChannel.SMS:
-          await this.executeSmsDispatch(delivery, alert, pond, user);
+          await this.executeSmsDispatch(delivery, alert, pond, authorized);
           break;
         case NotificationChannel.EMAIL:
-          await this.executeEmailDispatch(delivery, alert, pond, user);
+          await this.executeEmailDispatch(delivery, alert, pond, authorized);
           break;
       }
     } catch (channelError: any) {
       // Partial channel failure isolation
+      if (delivery.status === DeliveryStatus.PROVIDER_ACCEPTED ||
+          (delivery.status === DeliveryStatus.PROCESSING && delivery.failureCode?.endsWith('_OUTCOME_UNKNOWN'))) {
+        this.logger.error(`[Dispatcher] Channel ${channel} outcome needs reconciliation; automatic retry is held.`);
+        return;
+      }
       this.logger.error(`[Dispatcher] Failure in channel ${channel}; delivery was recorded as failed.`);
       delivery.status = DeliveryStatus.FAILED;
       delivery.failureCode = `${channel}_ERROR`;
@@ -274,10 +272,15 @@ export class NotificationDispatcherService {
       triggeredValue: String(alert.triggeredValue),
     };
 
-    const result = await this.fcmService.sendToTokens(tokens, title, body, data);
-
-    if (result.invalidTokens && result.invalidTokens.length > 0) {
-      await this.tokensService.deactivateTokens(result.invalidTokens);
+    let result: FcmMulticastResult;
+    try {
+      result = await this.fcmService.sendToTokens(tokens, title, body, data);
+    } catch {
+      delivery.status = DeliveryStatus.PROCESSING;
+      delivery.failureCode = 'FCM_OUTCOME_UNKNOWN';
+      delivery.failureReason = 'Provider response unavailable; manual reconciliation required';
+      await this.deliveryRepo.save(delivery);
+      return;
     }
 
     if (result.successCount > 0) {
@@ -293,6 +296,13 @@ export class NotificationDispatcherService {
     }
 
     await this.deliveryRepo.save(delivery);
+    if (result.invalidTokens?.length) {
+      try {
+        await this.tokensService.deactivateTokens(result.invalidTokens);
+      } catch {
+        this.logger.warn('[Dispatcher] FCM token cleanup failed after provider result was recorded.');
+      }
+    }
   }
 
   private async executeSmsDispatch(
@@ -322,9 +332,10 @@ export class NotificationDispatcherService {
       delivery.failureCode = null;
       delivery.failureReason = null;
     } catch (smsErr: any) {
-      delivery.status = DeliveryStatus.FAILED;
-      delivery.failureCode = 'SMS_GATEWAY_ERROR';
-      delivery.failureReason = smsErr.message;
+      const confirmed = smsErr instanceof ConfirmedSmsRejectionError;
+      delivery.status = confirmed ? DeliveryStatus.FAILED : DeliveryStatus.PROCESSING;
+      delivery.failureCode = confirmed ? 'SMS_GATEWAY_ERROR' : 'SMS_OUTCOME_UNKNOWN';
+      delivery.failureReason = confirmed ? smsErr.message : 'Provider response unavailable; manual reconciliation required';
     }
 
     await this.deliveryRepo.save(delivery);
@@ -364,9 +375,10 @@ export class NotificationDispatcherService {
       delivery.failureCode = null;
       delivery.failureReason = null;
     } catch (emailErr: any) {
-      delivery.status = DeliveryStatus.FAILED;
-      delivery.failureCode = 'EMAIL_GATEWAY_ERROR';
-      delivery.failureReason = emailErr.message;
+      const confirmed = emailErr instanceof ConfirmedEmailRejectionError;
+      delivery.status = confirmed ? DeliveryStatus.FAILED : DeliveryStatus.PROCESSING;
+      delivery.failureCode = confirmed ? 'EMAIL_GATEWAY_ERROR' : 'EMAIL_OUTCOME_UNKNOWN';
+      delivery.failureReason = confirmed ? emailErr.message : 'Provider response unavailable; manual reconciliation required';
     }
 
     await this.deliveryRepo.save(delivery);

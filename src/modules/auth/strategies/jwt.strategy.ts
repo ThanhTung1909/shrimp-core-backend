@@ -7,6 +7,7 @@ import { User } from '../../users/entities/user.entity.js';
 import { RedisService } from '../../../common/redis/redis.service.js';
 import { getAccessTokenBlacklistKey } from '../../../common/redis/rate-limit.constants.js';
 import { getLoginPendingManualKey } from '../../../common/redis/login-lockout.constants.js';
+import { SanitizedUser } from '../../../common/utils/sanitize-user.util.js';
 
 export interface JwtPayload {
   sub: string;
@@ -38,7 +39,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: JwtPayload): Promise<Omit<User, 'passwordHash'>> {
+  async validate(
+    payload: JwtPayload,
+  ): Promise<
+    SanitizedUser<User> & Pick<User, 'mustChangePassword' | 'tokenVersion'>
+  > {
     if (payload.type !== 'access') {
       throw new UnauthorizedException('Token không hợp lệ!');
     }
@@ -82,6 +87,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (user.tokenVersion !== payload.tokenVersion) {
       throw new UnauthorizedException('Token không hợp lệ!');
     }
-    return this.usersService.sanitizeUser(user);
+    const safeUser = this.usersService.sanitizeUser(user);
+    return {
+      ...safeUser,
+      mustChangePassword: user.mustChangePassword,
+      tokenVersion: user.tokenVersion,
+    };
   }
 }

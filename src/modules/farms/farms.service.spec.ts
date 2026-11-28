@@ -44,4 +44,69 @@ describe('FarmsService', () => {
       .resolves.toMatchObject({ farmId: 'farm', ownerId: null });
     expect(ponds.update).toHaveBeenCalledWith({ farmId: 'farm' }, { userId: 'admin-id' });
   });
+
+  it('strips all 5 sensitive user fields from farm owner, pond owner, and assigned farmers', async () => {
+    const { service, farms, ponds } = setup();
+    const sensitiveFields = {
+      passwordHash: 'secret-hash',
+      fcmToken: 'secret-fcm',
+      tokenVersion: 4,
+      isLocked: true,
+      mustChangePassword: true,
+    };
+    const farmWithUsers = {
+      farmId: 'farm-1',
+      ownerId: 'manager-1',
+      owner: {
+        userId: 'manager-1',
+        fullName: 'Manager One',
+        ...sensitiveFields,
+      },
+      ponds: [
+        {
+          pondId: 'pond-1',
+          user: {
+            userId: 'manager-1',
+            fullName: 'Manager One',
+            ...sensitiveFields,
+          },
+          farmerAssignments: [
+            {
+              assignmentId: 'assign-1',
+              farmer: {
+                userId: 'farmer-1',
+                fullName: 'Farmer One',
+                ...sensitiveFields,
+              },
+            },
+          ],
+        },
+      ],
+    };
+    farms.findOne.mockResolvedValue(farmWithUsers);
+    farms.findAndCount.mockResolvedValue([[farmWithUsers], 1]);
+    ponds.find.mockResolvedValue(farmWithUsers.ponds);
+
+    const expectSanitized = (userObj: any) => {
+      expect(userObj).toBeDefined();
+      expect(userObj).not.toHaveProperty('passwordHash');
+      expect(userObj).not.toHaveProperty('fcmToken');
+      expect(userObj).not.toHaveProperty('tokenVersion');
+      expect(userObj).not.toHaveProperty('isLocked');
+      expect(userObj).not.toHaveProperty('mustChangePassword');
+    };
+
+    const one = await service.findOne('farm-1', 'admin-id', Role.ADMIN);
+    expectSanitized(one.owner);
+    expectSanitized(one.ponds[0].user);
+    expectSanitized(one.ponds[0].farmerAssignments[0].farmer);
+
+    const list = await service.findAll({}, 'admin-id', Role.ADMIN);
+    expectSanitized(list.data[0].owner);
+    expectSanitized(list.data[0].ponds[0].farmerAssignments[0].farmer);
+
+    const farmPonds = await service.findPonds('farm-1', 'admin-id', Role.ADMIN);
+    expectSanitized(farmPonds[0].user);
+    expectSanitized(farmPonds[0].farmerAssignments[0].farmer);
+  });
 });

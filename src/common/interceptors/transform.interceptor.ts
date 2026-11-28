@@ -55,11 +55,9 @@ export class TransformInterceptor<T>
           typeof resData === 'object' &&
           !Array.isArray(resData)
         ) {
-          // If controller response explicitly contains a message string
-          if (typeof resData.message === 'string') {
-            if (!customMessage) {
-              finalMessage = resData.message;
-            }
+          // Only promote resData.message to the envelope when no @ResponseMessage override is set
+          if (!customMessage && typeof resData.message === 'string') {
+            finalMessage = resData.message;
             const { message: _msg, ...rest } = resData;
             // If object only had message property, payload data is null
             payload = Object.keys(rest).length > 0 ? rest : null;

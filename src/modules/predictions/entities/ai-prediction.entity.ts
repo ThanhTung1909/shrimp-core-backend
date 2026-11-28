@@ -2,10 +2,13 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
+  CreateDateColumn,
+  Index,
   ManyToOne,
   JoinColumn,
   type Relation,
 } from 'typeorm';
+import { PredictionType } from '../../../common/enums/prediction-type.enum.js';
 import { RiskLevel } from '../../../common/enums/risk-level.enum.js';
 import { Pond } from '../../ponds/entities/pond.entity.js';
 
@@ -14,6 +17,7 @@ import { Pond } from '../../ponds/entities/pond.entity.js';
  * Lưu trữ kết quả dự báo chất lượng nước (Oxy DO, pH) và điểm rủi ro trong tương lai từ mô hình AI.
  */
 @Entity('ai_prediction')
+@Index('idx_ai_prediction_pond_type_created', ['pondId', 'predictionType', 'createdAt'])
 export class AiPrediction {
   @PrimaryGeneratedColumn('uuid', { name: 'prediction_id' })
   predictionId: string;
@@ -58,6 +62,34 @@ export class AiPrediction {
     default: 'AI_MICROSERVICE',
   })
   predictionSource: string;
+
+  // Loại dự báo: WATER_QUALITY hoặc DISEASE_RISK
+  @Column({
+    name: 'prediction_type',
+    type: 'varchar',
+    length: 30,
+    default: PredictionType.WATER_QUALITY,
+  })
+  predictionType: PredictionType;
+
+  // Dự báo nhiệt độ nước (°C)
+  @Column({ name: 'predicted_temperature', type: 'double precision', nullable: true })
+  predictedTemperature: number | null;
+
+  // Khung thời gian dự báo (giờ)
+  @Column({ name: 'horizon_hours', type: 'int', nullable: true })
+  horizonHours: number | null;
+
+  // Payload chi tiết (chuỗi dự báo theo giờ hoặc phân tích rủi ro từng bệnh)
+  @Column({ name: 'payload', type: 'jsonb', nullable: true })
+  payload: Record<string, any> | null;
+
+  @CreateDateColumn({
+    name: 'created_at',
+    type: 'timestamp with time zone',
+    default: () => 'now()',
+  })
+  createdAt: Date;
 
   // Quan hệ ManyToOne với Pond: 1 Ao nuôi có thể có nhiều bản ghi dự báo lịch sử và tương lai
   @ManyToOne(() => Pond, (pond) => pond.predictions, { onDelete: 'CASCADE' })

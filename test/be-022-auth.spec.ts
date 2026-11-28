@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AuthService } from '../src/modules/auth/auth.service.js';
 import { UsersService } from '../src/modules/users/users.service.js';
-import { OtpService } from '../src/modules/auth/otp.service.js';
+import { OtpService } from '../src/common/redis/otp.service.js';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
