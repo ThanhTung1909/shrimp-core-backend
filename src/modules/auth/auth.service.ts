@@ -26,7 +26,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto.js';
 import { Role } from '../../common/enums/role.enum.js';
 import { UserSession } from './entities/user-session.entity.js';
 import { User } from '../users/entities/user.entity.js';
-import { OtpService } from './otp.service.js';
+import { OtpService } from '../../common/redis/otp.service.js';
 import { normalizePhone, getAccessTokenBlacklistKey } from '../../common/redis/rate-limit.constants.js';
 import { getEmailOtpIdentifier, normalizeEmail, OTP_CONFIG, OtpPurpose } from '../../common/redis/otp.constants.js';
 import { RedisService } from '../../common/redis/redis.service.js';

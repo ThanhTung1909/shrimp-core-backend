@@ -52,9 +52,10 @@ import { JwtService } from '@nestjs/jwt';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { getEmailOtpIdentifier } from '../../common/redis/otp.constants.js';
+import { SanitizedUser } from '../../common/utils/sanitize-user.util.js';
 
 export interface AuthenticatedRequest extends Request {
-  user: Omit<User, 'passwordHash'>;
+  user: SanitizedUser<User> & Pick<User, 'mustChangePassword' | 'tokenVersion'>;
 }
 
 @ApiTags('Auth - Xác Thực & Phân Quyền')

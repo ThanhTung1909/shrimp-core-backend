@@ -2,6 +2,7 @@ import { ConflictException, ForbiddenException, Injectable, NotFoundException } 
 import { InjectRepository } from '@nestjs/typeorm';
 import { ILike, Repository } from 'typeorm';
 import { Role } from '../../common/enums/role.enum.js';
+import { sanitizeUser } from '../../common/utils/sanitize-user.util.js';
 import { Pond } from '../ponds/entities/pond.entity.js';
 import { User } from '../users/entities/user.entity.js';
 import { CreateFarmDto, FindFarmsQueryDto, UpdateFarmDto } from './dto/farm.dto.js';
@@ -15,29 +16,16 @@ export class FarmsService {
     @InjectRepository(User) private readonly users: Repository<User>,
   ) {}
 
-  private sanitizeUser(user: unknown): Record<string, unknown> | undefined {
-    if (!user || typeof user !== 'object') return undefined;
-    const {
-      passwordHash: _passwordHash,
-      fcmToken: _fcmToken,
-      tokenVersion: _tokenVersion,
-      isLocked: _isLocked,
-      mustChangePassword: _mustChangePassword,
-      ...safeUser
-    } = user as Record<string, unknown>;
-    return safeUser;
-  }
-
   private sanitizePond(pond: Pond): Pond {
     const sanitizedAssignments = Array.isArray(pond.farmerAssignments)
       ? pond.farmerAssignments.map((a) => ({
           ...a,
-          ...(a.farmer ? { farmer: this.sanitizeUser(a.farmer) } : {}),
+          ...(a.farmer ? { farmer: sanitizeUser(a.farmer) } : {}),
         }))
       : pond.farmerAssignments;
     return {
       ...pond,
-      ...(pond.user ? { user: this.sanitizeUser(pond.user) } : {}),
+      ...(pond.user ? { user: sanitizeUser(pond.user) } : {}),
       ...(sanitizedAssignments ? { farmerAssignments: sanitizedAssignments } : {}),
     } as unknown as Pond;
   }
@@ -45,7 +33,7 @@ export class FarmsService {
   private sanitizeFarm(farm: Farm): Farm {
     return {
       ...farm,
-      ...(farm.owner ? { owner: this.sanitizeUser(farm.owner) } : {}),
+      ...(farm.owner ? { owner: sanitizeUser(farm.owner) } : {}),
       ...(Array.isArray(farm.ponds)
         ? { ponds: farm.ponds.map((p) => this.sanitizePond(p)) }
         : {}),

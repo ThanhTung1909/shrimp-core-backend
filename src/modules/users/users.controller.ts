@@ -26,6 +26,7 @@ import { AdminUpdateUserDto } from './dto/admin-update-user.dto.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
 import { FindUsersQueryDto } from './dto/find-users-query.dto.js';
 import { UnlockUserDto } from './dto/unlock-user.dto.js';
+import { SanitizedUser } from '../../common/utils/sanitize-user.util.js';
 
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 
@@ -48,7 +49,7 @@ export class UsersController {
     @Body() updateProfileDto: UpdateProfileDto,
   ): Promise<{
     message: string;
-    user: Omit<User, 'passwordHash'>;
+    user: SanitizedUser<User>;
   }> {
     const updatedUser = await this.usersService.updateProfile(
       userId,
@@ -89,7 +90,7 @@ export class UsersController {
     @CurrentUser('userId') actorId: string,
     @CurrentUser('role') actorRole: Role,
   ): Promise<{
-    data: Omit<User, 'passwordHash'>[];
+    data: SanitizedUser<User>[];
     total: number;
     page: number;
     limit: number;
@@ -106,7 +107,7 @@ export class UsersController {
   @ApiResponse({ status: 409, description: 'Số điện thoại đã tồn tại' })
   async createUser(@Body() createUserDto: CreateUserDto, @CurrentUser('userId') actorId: string): Promise<{
     message: string;
-    user: Omit<User, 'passwordHash'>;
+    user: SanitizedUser<User>;
   }> {
     const newUser = await this.usersService.createUserByAdmin(createUserDto, actorId);
     return {
@@ -125,7 +126,7 @@ export class UsersController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') currentUserId: string,
     @CurrentUser('role') role: Role,
-  ): Promise<Omit<User, 'passwordHash'>> {
+  ): Promise<SanitizedUser<User>> {
     const normalizedRole = role ? String(role).toUpperCase() : '';
     if (normalizedRole !== Role.ADMIN && normalizedRole !== Role.MANAGER && currentUserId !== id) {
       throw new ForbiddenException(
@@ -166,7 +167,7 @@ export class UsersController {
     @CurrentUser('userId') actorId: string,
   ): Promise<{
     message: string;
-    user: Omit<User, 'passwordHash'>;
+    user: SanitizedUser<User>;
   }> {
     const updatedUser = await this.usersService.adminUpdateUser(
       id,

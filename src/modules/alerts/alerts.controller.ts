@@ -13,6 +13,7 @@ import { QueryAlertDto } from './dto/query-alert.dto.js';
 import { ResolveAlertDto } from './dto/resolve-alert.dto.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import { ResponseMessage } from '../../common/decorators/response-message.decorator.js';
 import type { User } from '../users/entities/user.entity.js';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 
@@ -44,13 +45,15 @@ export class AlertsController {
       currentUser.userId,
       currentUser.role,
     );
+    const page = query.page || 1;
+    const limit = query.limit || 20;
 
     return {
-      success: true,
-      total,
-      page: query.page || 1,
-      limit: query.limit || 20,
       data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
     };
   }
 
@@ -59,6 +62,7 @@ export class AlertsController {
    * PATCH /alerts/:id/resolve
    */
   @Patch(':id/resolve')
+  @ResponseMessage('Đã giải quyết cảnh báo thành công')
   @ApiOperation({
     summary: 'Xác nhận và đánh dấu đã xử lý cảnh báo',
   })
@@ -75,16 +79,11 @@ export class AlertsController {
     @Body() dto: ResolveAlertDto,
     @CurrentUser() currentUser: User,
   ) {
-    const result = await this.alertsService.resolveAlert(
+    return this.alertsService.resolveAlert(
       id,
       currentUser.userId,
       dto,
       currentUser.role,
     );
-
-    return {
-      success: true,
-      data: result,
-    };
   }
 }

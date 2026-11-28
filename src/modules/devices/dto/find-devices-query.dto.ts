@@ -3,12 +3,15 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  IsUUID,
+  Matches,
   Max,
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { DeviceStatus } from '../../../common/enums/device-status.enum.js';
+
+const CANONICAL_UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class FindDevicesQueryDto {
   @IsOptional()
@@ -31,7 +34,7 @@ export class FindDevicesQueryDto {
   search?: string;
 
   @IsOptional()
-  @IsUUID()
+  @Matches(CANONICAL_UUID_REGEX, { message: 'pondId must be a UUID' })
   pondId?: string;
 
   @IsOptional()

@@ -3,6 +3,8 @@ import { TelemetryService } from './telemetry.service.js';
 import { DeviceStatus } from '../../common/enums/device-status.enum.js';
 import { Device } from '../devices/entities/device.entity.js';
 import { Pond } from '../ponds/entities/pond.entity.js';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Role } from '../../common/enums/role.enum.js';
 import { CreateTelemetryDto } from './dto/create-telemetry.dto.js';
 
 describe('TelemetryService', () => {
@@ -14,6 +16,7 @@ describe('TelemetryService', () => {
   let mockDataSource: any;
   let mockAlertsService: any;
   let mockRedisService: any;
+  let mockPondsService: any;
 
   beforeEach(() => {
     mockTelemetryRepo = {
@@ -68,6 +71,7 @@ describe('TelemetryService', () => {
     mockRedisService.reserveAlertCooldown = vi.fn(async (key, _level, ttl) =>
       (await mockRedisService.setIfAbsent(key, '1', ttl)) ? 'created' : 'suppressed',
     );
+    mockPondsService = { findPondById: vi.fn().mockResolvedValue({ pondId: 'pond-1' }) };
 
     service = new TelemetryService(
       mockTelemetryRepo,
@@ -77,7 +81,34 @@ describe('TelemetryService', () => {
       mockDataSource,
       mockAlertsService,
       mockRedisService,
+      mockPondsService,
     );
+  });
+
+  describe('assertDeviceReadAccess', () => {
+    it('delegates human access to the existing pond scope policy before telemetry reads', async () => {
+      mockDeviceRepo.findOne.mockResolvedValue({ deviceId: 'device-1', pondId: 'pond-1' });
+
+      await service.assertDeviceReadAccess('device-1', 'farmer-1', Role.FARMER);
+
+      expect(mockPondsService.findPondById).toHaveBeenCalledWith('pond-1', 'farmer-1', Role.FARMER);
+    });
+
+    it('fails closed for an unknown or unassigned device', async () => {
+      mockDeviceRepo.findOne.mockResolvedValueOnce(null);
+      await expect(service.assertDeviceReadAccess('missing', 'farmer-1', Role.FARMER)).rejects.toBeInstanceOf(NotFoundException);
+
+      mockDeviceRepo.findOne.mockResolvedValueOnce({ deviceId: 'unassigned', pondId: null });
+      await expect(service.assertDeviceReadAccess('unassigned', 'farmer-1', Role.FARMER)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(mockPondsService.findPondById).not.toHaveBeenCalled();
+    });
+
+    it('does not weaken a cross-pond denial from PondsService', async () => {
+      mockDeviceRepo.findOne.mockResolvedValue({ deviceId: 'foreign-device', pondId: 'pond-b' });
+      mockPondsService.findPondById.mockRejectedValueOnce(new ForbiddenException());
+
+      await expect(service.assertDeviceReadAccess('foreign-device', 'farmer-a', Role.FARMER)).rejects.toBeInstanceOf(ForbiddenException);
+    });
   });
 
   describe('processTelemetryPayloadWithAck', () => {

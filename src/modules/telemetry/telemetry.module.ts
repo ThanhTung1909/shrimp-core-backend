@@ -16,6 +16,9 @@ import { TelemetryGateway } from './telemetry.gateway.js';
 import { RedisModule } from '../../common/redis/redis.module.js';
 import { PondsModule } from '../ponds/ponds.module.js';
 import { UsersModule } from '../users/users.module.js';
+import { isHttpOnlyMode } from '../../common/runtime/http-only-mode.js';
+
+const httpOnlyMode = isHttpOnlyMode();
 
 @Module({
   imports: [
@@ -40,10 +43,10 @@ import { UsersModule } from '../users/users.module.js';
   controllers: [TelemetryController],
   providers: [
     TelemetryService,
-    TelemetryMqttService,
-    DeviceHealthService,
-    TelemetryGateway,
+    ...(!httpOnlyMode
+      ? [TelemetryMqttService, DeviceHealthService, TelemetryGateway]
+      : []),
   ],
-  exports: [TelemetryService, TelemetryMqttService, TelemetryGateway, TypeOrmModule],
+  exports: [TelemetryService, TypeOrmModule],
 })
 export class TelemetryModule {}

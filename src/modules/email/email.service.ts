@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import nodemailer, { type Transporter } from 'nodemailer';
 
+export class ConfirmedEmailRejectionError extends Error {}
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -70,7 +72,7 @@ export class EmailService {
     }
 
     if (!result.accepted?.length || result.rejected?.length) {
-      throw new Error(errorMessage);
+      throw new ConfirmedEmailRejectionError(errorMessage);
     }
   }
 

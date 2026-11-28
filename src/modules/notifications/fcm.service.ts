@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { initializeApp, getApps, cert, type App } from 'firebase-admin/app';
 import { getMessaging, type MulticastMessage, type SendResponse } from 'firebase-admin/messaging';
+import { isHttpOnlyMode } from '../../common/runtime/http-only-mode.js';
 
 export interface FcmMulticastResult {
   successCount: number;
@@ -19,6 +20,11 @@ export class FcmService implements OnModuleInit {
   constructor(private readonly configService: ConfigService) {}
 
   onModuleInit() {
+    if (isHttpOnlyMode()) {
+      this.runtimeStatus = 'FCM_RUNTIME_BLOCKED';
+      this.logger.log('[HTTP-only] FCM runtime initialization is disabled.');
+      return;
+    }
     this.initializeFirebase();
   }
 

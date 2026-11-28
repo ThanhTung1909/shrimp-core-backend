@@ -8,15 +8,22 @@ import {
   ParseUUIDPipe,
   NotFoundException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiParam, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { PredictionsService } from './predictions.service.js';
 import { PredictionSchedulerService } from './prediction-scheduler.service.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../../common/guards/roles.guard.js';
 import { Roles } from '../../common/decorators/roles.decorator.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import { ResponseMessage } from '../../common/decorators/response-message.decorator.js';
 import { Role } from '../../common/enums/role.enum.js';
 import { AiPrediction } from './entities/ai-prediction.entity.js';
+import { QueryWaterQualityForecastDto } from './dto/query-water-quality-forecast.dto.js';
+import { QueryDiseaseRiskDto } from './dto/query-disease-risk.dto.js';
+import {
+  DiseaseRiskResponseDto,
+  WaterQualityForecastResponseDto,
+} from './dto/prediction-response.dto.js';
 
 @ApiTags('Predictions - Dự Báo AI & Đánh Giá Rủi Ro')
 @ApiBearerAuth('JWT-auth')
@@ -75,5 +82,45 @@ export class PredictionsController {
   async triggerActivePondsNow(): Promise<{ message: string }> {
     await this.schedulerService.triggerActivePondsNow();
     return { message: 'Đã đưa tác vụ tính toán AI các ao active vào hàng đợi BullMQ' };
+  }
+
+  @Get('ponds/:pondId/water-quality')
+  @ResponseMessage('Lấy dự báo chất lượng nước thành công')
+  @ApiOperation({ summary: 'Dự báo chất lượng nước đa khung giờ (12h - 24h) cho một ao nuôi' })
+  @ApiParam({ name: 'pondId', type: String, format: 'uuid', description: 'ID của ao nuôi' })
+  @ApiResponse({
+    status: 200,
+    description: 'Kết quả dự báo chất lượng nước đa khung giờ',
+    type: WaterQualityForecastResponseDto,
+  })
+  @ApiResponse({ status: 403, description: 'Không có quyền truy cập ao nuôi này' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy ao nuôi' })
+  async getWaterQualityForecast(
+    @Param('pondId', ParseUUIDPipe) pondId: string,
+    @Query() query: QueryWaterQualityForecastDto,
+    @CurrentUser('userId') userId: string,
+    @CurrentUser('role') role: Role,
+  ): Promise<WaterQualityForecastResponseDto> {
+    return this.predictionsService.getWaterQualityForecast(pondId, query, userId, role);
+  }
+
+  @Get('ponds/:pondId/disease-risk')
+  @ResponseMessage('Đánh giá rủi ro dịch bệnh thành công')
+  @ApiOperation({ summary: 'Đánh giá rủi ro dịch bệnh (WSSV & AHPND/EMS) cho một ao nuôi' })
+  @ApiParam({ name: 'pondId', type: String, format: 'uuid', description: 'ID của ao nuôi' })
+  @ApiResponse({
+    status: 200,
+    description: 'Kết quả đánh giá rủi ro dịch bệnh',
+    type: DiseaseRiskResponseDto,
+  })
+  @ApiResponse({ status: 403, description: 'Không có quyền truy cập ao nuôi này' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy ao nuôi' })
+  async getDiseaseRiskAssessment(
+    @Param('pondId', ParseUUIDPipe) pondId: string,
+    @Query() query: QueryDiseaseRiskDto,
+    @CurrentUser('userId') userId: string,
+    @CurrentUser('role') role: Role,
+  ): Promise<DiseaseRiskResponseDto> {
+    return this.predictionsService.getDiseaseRiskAssessment(pondId, query, userId, role);
   }
 }
