@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TelemetryService } from './telemetry.service.js';
 import { DeviceStatus } from '../../common/enums/device-status.enum.js';
+import { Device } from '../devices/entities/device.entity.js';
+import { Pond } from '../ponds/entities/pond.entity.js';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Role } from '../../common/enums/role.enum.js';
 import { CreateTelemetryDto } from './dto/create-telemetry.dto.js';
@@ -37,8 +39,21 @@ describe('TelemetryService', () => {
       save: vi.fn((data) => Promise.resolve({ id: '1', ...data })),
     };
 
+    const transactionManager = {
+      // Return the device that the outer repository lookup just observed
+      // without consuming another mockResolvedValueOnce() fixture.
+      findOne: vi.fn(async (entity) => {
+        const latestLookup = mockDeviceRepo.findOne.mock.results.at(-1)?.value;
+        const device = latestLookup ? await latestLookup : null;
+        return entity === Pond ? device?.pond ?? null : device;
+      }),
+      create: vi.fn((_entity, data) => mockTelemetryRepo.create(data)),
+      save: vi.fn((data) => mockTelemetryRepo.save(data)),
+      update: vi.fn((_entity, criteria, patch) => mockDeviceRepo.update(criteria, patch)),
+    };
     mockDataSource = {
       query: vi.fn().mockResolvedValue([{ count: '1' }]),
+      transaction: vi.fn(async (callback) => callback(transactionManager)),
     };
 
     mockThresholdConfigRepo = { find: vi.fn().mockResolvedValue([]) };
@@ -128,6 +143,7 @@ describe('TelemetryService', () => {
 
       const manager = {
         createQueryBuilder: vi.fn().mockReturnValue(queryBuilder),
+        findOne: vi.fn((entity) => Promise.resolve(entity === Pond ? device.pond : device)),
         create: vi.fn((_entity, data) => data),
         save: vi.fn().mockResolvedValue({ id: 'telemetry-1', ...dto }),
         update: vi.fn().mockResolvedValue({ affected: 1 }),
@@ -161,6 +177,36 @@ describe('TelemetryService', () => {
       expect(manager.save).not.toHaveBeenCalled();
       expect(mockRedisService.publish).not.toHaveBeenCalled();
       expect(mockThresholdConfigRepo.find).not.toHaveBeenCalled();
+      expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+    });
+
+    it('acknowledges MAINTENANCE telemetry without reviving the device or creating alerts', async () => {
+      const maintenanceDevice = { ...device, status: DeviceStatus.MAINTENANCE };
+      const realtimeDto = {
+        ...dto,
+        messageId: 'maintenance-ack-001',
+        isBuffered: false,
+        dissolvedOxygen: 2.0,
+      };
+      mockDeviceRepo.findOne.mockResolvedValue(maintenanceDevice);
+      const { manager } = mockReceiptTransaction([{ id: 'receipt-maintenance' }]);
+      manager.findOne.mockResolvedValue(maintenanceDevice);
+      mockThresholdConfigRepo.find.mockResolvedValue([
+        { pondId: 'pond-1', metricName: 'DO', minValue: 4, maxValue: 8, isActive: true },
+      ]);
+
+      const result = await service.processTelemetryPayloadWithAck(realtimeDto);
+
+      expect(result).toEqual(expect.objectContaining({ acknowledged: true, duplicate: false }));
+      expect(manager.create).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ isMaintenance: true }),
+      );
+      expect(manager.update).not.toHaveBeenCalledWith(
+        Device,
+        maintenanceDevice.deviceId,
+        expect.anything(),
+      );
       expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
     });
   });
@@ -266,6 +312,54 @@ describe('TelemetryService', () => {
       expect(mockThresholdConfigRepo.find).not.toHaveBeenCalled();
       expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
     });
+
+    it.each([
+      ['pH calibration', { ph: 4.0 }, 'ph', 6.8, 9.2],
+      ['low dissolved oxygen calibration', { dissolvedOxygen: 2.0 }, 'dissolvedoxygen', 4, 8],
+      ['high temperature calibration', { temperature: 38 }, 'temperature', 20, 30],
+    ])(
+      'BR-03 retains %s as maintenance telemetry and never creates a threshold alert',
+      async (_description, metrics, metricName, minValue, maxValue) => {
+        const initiallyOnline = {
+          deviceId: 'maintenance-race-device',
+          pondId: 'pond-1',
+          status: DeviceStatus.ONLINE,
+          pond: { pondId: 'pond-1', userId: 'user-1' },
+        };
+        const maintenanceAtWrite = {
+          ...initiallyOnline,
+          status: DeviceStatus.MAINTENANCE,
+        };
+        mockDeviceRepo.findOne.mockResolvedValue(initiallyOnline);
+        mockThresholdConfigRepo.find.mockResolvedValue([
+          { pondId: 'pond-1', metricName, minValue, maxValue, isActive: true },
+        ]);
+        const manager = {
+          findOne: vi.fn().mockResolvedValue(maintenanceAtWrite),
+          create: vi.fn((_entity, data) => data),
+          save: vi.fn(async (data) => ({ id: 'maintenance-record', ...data })),
+          update: vi.fn().mockResolvedValue({ affected: 0 }),
+        };
+        mockDataSource.transaction = vi.fn(async (callback) => callback(manager));
+
+        await service.processTelemetryPayload({
+          deviceId: initiallyOnline.deviceId,
+          messageId: `maintenance-${metricName}`,
+          ...metrics,
+        });
+
+        expect(manager.findOne).toHaveBeenCalledWith(
+          Device,
+          expect.objectContaining({ lock: { mode: 'pessimistic_read' } }),
+        );
+        expect(manager.create).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ isMaintenance: true }),
+        );
+        expect(manager.update).not.toHaveBeenCalled();
+        expect(mockAlertsService.createThresholdAlert).not.toHaveBeenCalled();
+      },
+    );
 
     it.each([
       ['in-range', 25, 20, 30],
@@ -974,7 +1068,7 @@ describe('TelemetryService', () => {
 
       expect(result).toEqual(mockRecord);
       expect(mockTelemetryRepo.findOne).toHaveBeenCalledWith({
-        where: { deviceId: mockRecord.deviceId },
+        where: { deviceId: mockRecord.deviceId, isMaintenance: false },
         order: { recordedAt: 'DESC' },
       });
     });

@@ -52,6 +52,10 @@ export class TelemetryData {
   @Column({ type: 'boolean', default: false, name: 'is_buffered' })
   isBuffered: boolean;
 
+  /** Retained calibration data must not become a water-quality AI input. */
+  @Column({ type: 'boolean', default: false, name: 'is_maintenance' })
+  isMaintenance: boolean;
+
   @ManyToOne(() => Device, (device) => device.telemetries, {
     onDelete: 'CASCADE',
   })

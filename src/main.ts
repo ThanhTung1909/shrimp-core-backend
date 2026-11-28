@@ -1,7 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
 import { ConfigService } from '@nestjs/config';
-import * as mqtt from 'mqtt';
 
 import { configureHttpApp } from './http-app.config.js';
 import { isHttpOnlyMode } from './common/runtime/http-only-mode.js';
@@ -46,20 +45,6 @@ async function bootstrap() {
 
   if (isHttpOnlyMode()) {
     console.log('[HTTP-only] MQTT client, subscribers, workers, schedulers and SQL initialization are disabled.');
-    return;
   }
-
-  // Test kết nối MQTT Broker nội bộ
-  const mqttUrl =
-    configService.get<string>('MQTT_BROKER_URL') || 'mqtt://localhost:1883';
-  const mqttClient = mqtt.connect(mqttUrl);
-
-  mqttClient.on('connect', () => {
-    console.log(`[MQTT] Kết nối thành công tới Broker: ${mqttUrl}`);
-  });
-
-  mqttClient.on('error', (err) => {
-    console.error(`[MQTT] Kết nối thất bại:`, err.message);
-  });
 }
 bootstrap();

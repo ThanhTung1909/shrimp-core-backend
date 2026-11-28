@@ -6,6 +6,7 @@ import { PondStatus } from '../../common/enums/pond-status.enum.js';
 import { PredictionType } from '../../common/enums/prediction-type.enum.js';
 import { RiskLevel } from '../../common/enums/risk-level.enum.js';
 import { Role } from '../../common/enums/role.enum.js';
+import { DeviceStatus } from '../../common/enums/device-status.enum.js';
 import { ShrimpBatchStatus } from '../../common/enums/shrimp-batch-status.enum.js';
 
 describe('PredictionsService', () => {
@@ -183,6 +184,37 @@ describe('PredictionsService', () => {
 
     await expect(service.predictForPond(pondId)).rejects.toThrow('Không tìm thấy ao nuôi');
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('skips maintenance-device calibration telemetry when building an AI input', async () => {
+    mockPondRepo.findOne.mockResolvedValueOnce({
+      pondId,
+      devices: [
+        { deviceId: 'maintenance-device', status: DeviceStatus.MAINTENANCE },
+        { deviceId: 'water-device', status: DeviceStatus.ONLINE },
+      ],
+    });
+    mockTelemetryService.getLatestByDeviceId.mockResolvedValueOnce({
+      dissolvedOxygen: 5.2,
+      ph: 7.7,
+      temperature: 28.5,
+      salinity: 15,
+      turbidity: 20,
+    });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        predictedDO: 4.8,
+        predictedPH: 7.6,
+        riskScore: 25,
+        riskLevel: 'SAFE',
+      }),
+    } as any);
+
+    await service.predictForPond(pondId);
+
+    expect(mockTelemetryService.getLatestByDeviceId).toHaveBeenCalledTimes(1);
+    expect(mockTelemetryService.getLatestByDeviceId).toHaveBeenCalledWith('water-device');
   });
 
   it('does not query prediction history when pond access is rejected', async () => {
