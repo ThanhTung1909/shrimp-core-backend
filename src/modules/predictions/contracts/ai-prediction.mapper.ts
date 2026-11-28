@@ -1,11 +1,11 @@
 import { RiskLevel } from '../../../common/enums/risk-level.enum.js';
 
 /**
- * Boundary contract for the configured AI prediction endpoint.
+ * Contract tại ranh giới với endpoint AI prediction đã cấu hình.
  *
- * The endpoint is an external dependency: all values are treated as unknown
- * until they have passed this mapper.  The response vocabulary is deliberately
- * kept out of the persistence/domain layer.
+ * Endpoint là dependency bên ngoài: mọi giá trị được xem là chưa xác định
+ * cho đến khi đi qua mapper này. Từ vựng của response được chủ động tách khỏi
+ * tầng persistence/domain.
  */
 export interface AiPredictionRequest {
   pondId: string;
@@ -21,14 +21,14 @@ export interface AiPredictionRequest {
 }
 
 /**
- * Version of the one-way adapter from Core telemetry to the FastAPI develop
- * /api/predict contract.  Keep the version out of the JSON payload: FastAPI
- * has no such field and Pydantic must not silently ignore a duplicate schema.
+ * Phiên bản adapter một chiều từ telemetry Core sang contract FastAPI
+ * `/api/predict`. Version không được đưa vào JSON vì FastAPI không nhận
+ * field này và schema không được âm thầm bỏ qua contract trùng lặp.
  */
 export const AI_PREDICTION_CONTRACT_VERSION = 'ai-develop-v1' as const;
 export type AiPredictionContractVersion = typeof AI_PREDICTION_CONTRACT_VERSION;
 
-/** Values collected by Core before they are admitted to the FastAPI contract. */
+/** Các giá trị Core thu thập trước khi được chấp nhận vào contract FastAPI. */
 export interface AiPredictionRequestInput {
   pondId?: unknown;
   currentDO?: unknown;
@@ -63,12 +63,11 @@ const RISK_LEVEL_MAP: Record<string, RiskLevel> = {
 };
 
 /**
- * Builds only payloads that FastAPI's ``ForecastRequest`` can accept.
+ * Chỉ tạo payload mà `ForecastRequest` của FastAPI có thể chấp nhận.
  *
- * Core must not turn a missing sensor reading into a made-up value simply to
- * call AI. Returning a typed failure lets PredictionsService choose its normal
- * heuristic fallback before making an avoidable HTTP request that would be
- * rejected with 422.
+ * Core không được biến số đo cảm biến bị thiếu thành giá trị giả chỉ để gọi AI.
+ * Trả về lỗi có kiểu cho phép PredictionsService chọn heuristic fallback thông
+ * thường trước khi tạo một HTTP request có thể tránh được và sẽ bị từ chối 422.
  */
 export function buildAiPredictionRequest(
   input: AiPredictionRequestInput,
@@ -112,7 +111,7 @@ export function buildAiPredictionRequest(
   };
 }
 
-/** Maps the documented AI response (SAFE|WARNING|DANGER, score 0..100) to the domain model. */
+/** Ánh xạ response AI đã tài liệu hóa (SAFE|WARNING|DANGER, score 0..100) sang domain model. */
 export function mapAiPredictionResponse(payload: unknown): AiPredictionMappingResult {
   if (!isRecord(payload)) return { ok: false, reason: 'response is not an object' };
 
@@ -151,9 +150,9 @@ function numberField(record: UnknownRecord, field: string): number | null {
 }
 
 function isUuid(value: string): boolean {
-  // FastAPI/Pydantic accepts canonical UUIDs without restricting the version.
-  // Keep this boundary aligned so Core does not reject a database UUID that
-  // FastAPI would otherwise accept (for example a future UUIDv7 identifier).
+  // FastAPI/Pydantic chấp nhận UUID canonical mà không giới hạn phiên bản.
+  // Giữ ranh giới này đồng bộ để Core không từ chối UUID từ database mà
+  // FastAPI vẫn chấp nhận (ví dụ UUIDv7 trong tương lai).
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value);
 }
 

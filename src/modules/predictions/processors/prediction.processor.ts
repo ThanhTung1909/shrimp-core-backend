@@ -38,13 +38,14 @@ export class PredictionQueueProcessor extends WorkerHost {
           throw new Error('Thiếu pondId để thực hiện dự báo');
         }
         try {
-          return await this.predictionsService.predictForPond(pondId);
+          return await this.predictionsService.predictForPond(pondId, undefined, undefined, {
+            triggerSource: (job.data as TriggerPondPredictionJobData).triggerSource ?? 'scheduled',
+            correlationId: `queue:${job.id}`,
+            jobId: String(job.id),
+          });
         } catch (error) {
           if (isTelemetryUnavailable(error)) {
-            // Missing, stale or invalid telemetry is not a transient worker
-            // failure.  Mark this run as intentionally skipped so BullMQ does
-            // not retry it and accidentally create a prediction later from a
-            // different, unreviewed sample.
+            // Missing, stale or invalid telemetry is not a transient worker failure.
             job.discard();
             const detail = error.getResponse() as { errorCode?: string };
             this.logger.warn(
@@ -57,7 +58,7 @@ export class PredictionQueueProcessor extends WorkerHost {
       }
 
       case PREDICTION_JOBS.CRON_ACTIVE_PONDS: {
-        return await this.handleCronActivePonds();
+        return await this.handleCronActivePonds(job);
       }
 
       default:
@@ -66,7 +67,7 @@ export class PredictionQueueProcessor extends WorkerHost {
     }
   }
 
-  private async handleCronActivePonds(): Promise<{ triggeredCount: number }> {
+  private async handleCronActivePonds(job: Job): Promise<{ triggeredCount: number }> {
     this.logger.log('[Prediction Worker] Bắt đầu quét các ao nuôi active để kích hoạt dự báo AI định kỳ (30 phút/lần)...');
     const activePondIds = await this.predictionsService.getActivePondIds();
 
@@ -76,7 +77,7 @@ export class PredictionQueueProcessor extends WorkerHost {
       if (typeof this.predictionQueue.addBulk === 'function') {
         const jobs = activePondIds.map((pondId) => ({
           name: PREDICTION_JOBS.TRIGGER_POND,
-          data: { pondId },
+          data: { pondId, triggerSource: job.data?.manualTrigger ? 'manual-active' : 'scheduled', parentJobId: String(job.id) },
           opts: {
             attempts: 2,
             backoff: { type: 'fixed' as const, delay: 5000 },
@@ -88,7 +89,7 @@ export class PredictionQueueProcessor extends WorkerHost {
         for (const pondId of activePondIds) {
           await this.predictionQueue.add(
             PREDICTION_JOBS.TRIGGER_POND,
-            { pondId },
+            { pondId, triggerSource: job.data?.manualTrigger ? 'manual-active' : 'scheduled', parentJobId: String(job.id) },
             {
               attempts: 2,
               backoff: { type: 'fixed', delay: 5000 },

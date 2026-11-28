@@ -170,9 +170,13 @@ describe('PredictionsService', () => {
   });
 
   it.each([
+    ['missing DO', { ph: 7.7, temperature: 28.5, salinity: 15, turbidity: 20, recordedAt: new Date(Date.now() - 60_000) }],
+    ['missing pH', { dissolvedOxygen: 5.2, temperature: 28.5, salinity: 15, turbidity: 20, recordedAt: new Date(Date.now() - 60_000) }],
+    ['missing temperature', { dissolvedOxygen: 5.2, ph: 7.7, salinity: 15, turbidity: 20, recordedAt: new Date(Date.now() - 60_000) }],
     ['missing salinity', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, turbidity: 20, recordedAt: new Date(Date.now() - 60_000) }],
     ['missing turbidity', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, salinity: 15, recordedAt: new Date(Date.now() - 60_000) }],
     ['invalid salinity', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, salinity: Number.NaN, turbidity: 20, recordedAt: new Date(Date.now() - 60_000) }],
+    ['infinite DO', { dissolvedOxygen: Infinity, ph: 7.7, temperature: 28.5, salinity: 15, turbidity: 20, recordedAt: new Date(Date.now() - 60_000) }],
     ['out-of-range temperature', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 60, salinity: 15, turbidity: 20, recordedAt: new Date(Date.now() - 60_000) }],
   ])('rejects %s without HTTP request or persistence', async (_scenario, telemetry) => {
     mockTelemetryService.getLatestByDeviceId.mockResolvedValueOnce(telemetry);
@@ -220,8 +224,85 @@ describe('PredictionsService', () => {
     const result = await service.predictForPond(pondId);
 
     expect(global.fetch).not.toHaveBeenCalled();
-    expect(result.isFallback).toBe(true);
-    expect(result.predictionSource).toBe('HEURISTIC_RULE');
+    expect(result).toMatchObject({ isFallback: true, predictionSource: 'HEURISTIC_RULE' });
+    expect(mockPredictionRepo.save).toHaveBeenCalledOnce();
+  });
+
+  it('rejects stale telemetry instead of treating it as realtime or persisting a prediction', async () => {
+    mockTelemetryService.getLatestByDeviceId.mockResolvedValueOnce({
+      dissolvedOxygen: 5.2,
+      ph: 7.7,
+      temperature: 28.5,
+      salinity: 15,
+      turbidity: 20,
+      recordedAt: new Date(Date.now() - 16 * 60_000),
+    });
+    global.fetch = vi.fn();
+
+    await expect(service.predictForPond(pondId)).rejects.toThrow('không còn mới');
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(mockPredictionRepo.save).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['malformed', 'not-a-timestamp'],
+    ['future', new Date(Date.now() + 60_000)],
+  ])('rejects %s telemetry timestamps before HTTP or persistence', async (_scenario, recordedAt) => {
+    mockTelemetryService.getLatestByDeviceId.mockResolvedValueOnce({
+      dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, salinity: 15, turbidity: 20, recordedAt,
+    });
+    global.fetch = vi.fn();
+
+    await expect(service.predictForPond(pondId)).rejects.toThrow();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(mockPredictionRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('honors a configured maximum telemetry age', async () => {
+    mockConfigService.get.mockImplementation((key: string) => {
+      if (key === 'AI_PREDICTION_API_URL') return 'http://ai-service:8000/predict';
+      if (key === 'AI_PRODUCTION_INFERENCE_APPROVED') return 'true';
+      if (key === 'PREDICTION_TELEMETRY_MAX_AGE_MINUTES') return '20';
+      return null;
+    });
+    mockTelemetryService.getLatestByDeviceId.mockResolvedValueOnce({
+      dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, salinity: 15, turbidity: 20,
+      recordedAt: new Date(Date.now() - 16 * 60_000),
+    });
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 503 } as any);
+
+    await expect(service.predictForPond(pondId)).resolves.toMatchObject({ isFallback: true });
+    expect(global.fetch).toHaveBeenCalledOnce();
+  });
+
+  it('accepts telemetry exactly at the configured age boundary', async () => {
+    const now = Date.parse('2026-11-17T08:00:00.000Z');
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    mockTelemetryService.getLatestByDeviceId.mockResolvedValueOnce({
+      dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, salinity: 15, turbidity: 20,
+      recordedAt: new Date(now - 15 * 60_000),
+    });
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 503 } as any);
+
+    await expect(service.predictForPond(pondId)).resolves.toMatchObject({ isFallback: true });
+    expect(global.fetch).toHaveBeenCalledOnce();
+  });
+
+  it('sends the source telemetry timestamp and correlation ID to FastAPI', async () => {
+    const recordedAt = new Date();
+    mockTelemetryService.getLatestByDeviceId.mockResolvedValueOnce({
+      dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, salinity: 15, turbidity: 20, recordedAt,
+    });
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 503 } as any);
+
+    await service.predictForPond(pondId, undefined, undefined, {
+      triggerSource: 'scheduled', correlationId: 'queue:test-1', jobId: 'test-1',
+    });
+
+    const request = (global.fetch as any).mock.calls[0][1];
+    expect(JSON.parse(request.body).timestamp).toBe(recordedAt.toISOString());
+    expect(request.headers['X-Request-ID']).toBe('queue:test-1');
   });
 
   it('rejects an unknown pond before it can call FastAPI', async () => {

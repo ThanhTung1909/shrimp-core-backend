@@ -40,7 +40,12 @@ describe('PredictionQueueProcessor', () => {
 
       const result = await processor.process(mockJob);
 
-      expect(mockPredictionsService.predictForPond).toHaveBeenCalledWith('pond-100');
+      expect(mockPredictionsService.predictForPond).toHaveBeenCalledWith(
+        'pond-100',
+        undefined,
+        undefined,
+        expect.objectContaining({ triggerSource: 'scheduled', correlationId: 'queue:pred-job-1', jobId: 'pred-job-1' }),
+      );
       expect(result).toEqual(
         expect.objectContaining({
           predictionId: 'pred-1',
@@ -92,12 +97,12 @@ describe('PredictionQueueProcessor', () => {
       expect(mockQueue.add).toHaveBeenCalledTimes(2);
       expect(mockQueue.add).toHaveBeenCalledWith(
         PREDICTION_JOBS.TRIGGER_POND,
-        { pondId: 'pond-1' },
+        expect.objectContaining({ pondId: 'pond-1', triggerSource: 'scheduled', parentJobId: 'cron-job-1' }),
         expect.any(Object),
       );
       expect(mockQueue.add).toHaveBeenCalledWith(
         PREDICTION_JOBS.TRIGGER_POND,
-        { pondId: 'pond-2' },
+        expect.objectContaining({ pondId: 'pond-2', triggerSource: 'scheduled', parentJobId: 'cron-job-1' }),
         expect.any(Object),
       );
       expect(result).toEqual({ triggeredCount: 2 });
@@ -114,11 +119,27 @@ describe('PredictionQueueProcessor', () => {
       const result = await processor.process(mockJob);
       expect(mockQueue.addBulk).toHaveBeenCalledWith(
         expect.arrayContaining([
-          expect.objectContaining({ name: PREDICTION_JOBS.TRIGGER_POND, data: { pondId: 'pond-1' } }),
-          expect.objectContaining({ name: PREDICTION_JOBS.TRIGGER_POND, data: { pondId: 'pond-2' } }),
+          expect.objectContaining({ name: PREDICTION_JOBS.TRIGGER_POND, data: expect.objectContaining({ pondId: 'pond-1', triggerSource: 'scheduled', parentJobId: 'cron-job-2' }) }),
+          expect.objectContaining({ name: PREDICTION_JOBS.TRIGGER_POND, data: expect.objectContaining({ pondId: 'pond-2', triggerSource: 'scheduled', parentJobId: 'cron-job-2' }) }),
         ]),
       );
       expect(result).toEqual({ triggeredCount: 2 });
     });
+  });
+
+  it('discards a deterministic stale-telemetry job instead of retrying it', async () => {
+    const { ServiceUnavailableException } = await import('@nestjs/common');
+    mockPredictionsService.predictForPond.mockRejectedValueOnce(
+      new ServiceUnavailableException({ errorCode: 'PREDICTION_TELEMETRY_STALE' }),
+    );
+    const mockJob: any = {
+      id: 'stale-job-1', name: PREDICTION_JOBS.TRIGGER_POND, data: { pondId: 'pond-100' }, discard: vi.fn(),
+    };
+
+    await expect(processor.process(mockJob)).resolves.toEqual({
+      skipped: true,
+      reason: 'PREDICTION_TELEMETRY_STALE',
+    });
+    expect(mockJob.discard).toHaveBeenCalledOnce();
   });
 });

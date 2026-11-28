@@ -29,8 +29,8 @@ export class AiPredictionHttpClient {
     private readonly configService?: ConfigService,
   ) {}
 
-  async predictLegacy(payload: unknown): Promise<AiPredictionHttpResult> {
-    return this.post('legacy', payload);
+  async predictLegacy(payload: unknown, correlationId?: string): Promise<AiPredictionHttpResult> {
+    return this.post('legacy', payload, correlationId);
   }
 
   async predictWaterQuality(payload: unknown): Promise<AiPredictionHttpResult> {
@@ -62,7 +62,7 @@ export class AiPredictionHttpClient {
     return deriveEndpointUrl(baseUrl, kind);
   }
 
-  private async post(kind: AiEndpointKind, payload: unknown): Promise<AiPredictionHttpResult> {
+  private async post(kind: AiEndpointKind, payload: unknown, correlationId?: string): Promise<AiPredictionHttpResult> {
     const url = this.resolveEndpointUrl(kind);
     if (!url) {
       return {
@@ -81,6 +81,9 @@ export class AiPredictionHttpClient {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
+    if (correlationId) {
+      headers['X-Request-ID'] = correlationId;
+    }
     const apiKey = this.getTrimmedConfig('AI_PREDICTION_API_KEY');
     if (apiKey) {
       headers['X-API-Key'] = apiKey;

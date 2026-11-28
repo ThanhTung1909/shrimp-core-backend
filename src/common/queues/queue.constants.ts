@@ -36,4 +36,6 @@ export interface SendFcmJobData {
 
 export interface TriggerPondPredictionJobData {
   pondId: string;
+  triggerSource?: 'scheduled' | 'manual-active';
+  parentJobId?: string;
 }

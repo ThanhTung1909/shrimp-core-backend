@@ -5,6 +5,7 @@ import {
   Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -80,6 +81,12 @@ interface DiseaseRiskHeuristicOutput {
   recommendations: string[];
 }
 
+export interface PredictionExecutionContext {
+  triggerSource: 'manual-pond-trigger' | 'scheduled' | 'manual-active' | 'direct';
+  correlationId?: string;
+  jobId?: string;
+}
+
 type PredictionTelemetry = {
   dissolvedOxygen: number;
   ph: number;
@@ -152,6 +159,7 @@ export class PredictionsService {
     pondId: string,
     actorUserId?: string,
     actorRole?: Role,
+    executionContext: PredictionExecutionContext = { triggerSource: 'direct' },
   ): Promise<AiPrediction> {
     const pond = await this.findPondForPrediction(pondId, actorUserId, actorRole);
 
@@ -159,10 +167,9 @@ export class PredictionsService {
       throw new NotFoundException(`Không tìm thấy ao nuôi với ID: ${pondId}`);
     }
 
-    // A prediction must be based on one complete, recent sensor sample.  Do
-    // not substitute nominal values: doing so turns missing telemetry into a
-    // seemingly successful assessment and makes both audit and remediation
-    // impossible.
+    const correlationId = executionContext.correlationId ?? randomUUID();
+    // Một dự báo phải dựa trên một mẫu cảm biến hoàn chỉnh, còn mới; không
+    // thay bằng giá trị danh nghĩa để biến telemetry thiếu thành kết quả giả.
     const telemetry = await this.getFreshPredictionTelemetry(pond);
     const currentDO = telemetry.dissolvedOxygen;
     const currentPH = telemetry.ph;
@@ -198,7 +205,7 @@ export class PredictionsService {
 
     const aiProductionApproved = this.configService.get<string>('AI_PRODUCTION_INFERENCE_APPROVED') === 'true';
     if (aiProductionApproved) {
-      const httpResult = await this.httpClient.predictLegacy(aiRequest.value);
+      const httpResult = await this.httpClient.predictLegacy(aiRequest.value, correlationId);
       if (httpResult.ok) {
         const mapped = mapAiPredictionResponse(httpResult.data);
         if (mapped.ok) {
@@ -207,7 +214,7 @@ export class PredictionsService {
           riskScore = mapped.value.riskScore;
           riskLevel = mapped.value.riskLevel;
           externalAiSuccess = true;
-          this.logger.log(`[AI Prediction] Nhận kết quả hợp lệ từ AI Microservice cho ao ${pondId}`);
+          this.logger.log(JSON.stringify({ event: 'ai_prediction_response', pondId, correlationId, source: executionContext.triggerSource, jobId: executionContext.jobId, outcome: 'ai_success' }));
         } else {
           this.logger.warn(
             `[AI Prediction Contract Warning] Phản hồi AI không hợp lệ cho ao ${pondId}: ${mapped.reason}. Sử dụng mô hình ước tính tích hợp.`,
@@ -269,9 +276,7 @@ export class PredictionsService {
     });
 
     const savedPrediction = await this.predictionRepo.save(predictionRecord);
-    this.logger.log(
-      `[AI Prediction] Đã lưu bản ghi dự báo cho ao ${pondId}: DO=${predictedDO}, pH=${predictedPH}, RiskScore=${riskScore}, RiskLevel=${riskLevel}, Source=${predictionRecord.predictionSource}`,
-    );
+    this.logger.log(JSON.stringify({ event: 'prediction_persisted', pondId, correlationId, source: executionContext.triggerSource, jobId: executionContext.jobId, predictionSource: predictionRecord.predictionSource, isFallback: predictionRecord.isFallback, telemetryRecordedAt: telemetry.recordedAt.toISOString() }));
 
     return savedPrediction;
   }
@@ -682,7 +687,7 @@ export class PredictionsService {
     if (ageMs > maxAgeMs) {
       throw this.predictionUnavailable(
         'PREDICTION_TELEMETRY_STALE',
-        `Telemetry đã quá thời hạn ${this.getPredictionTelemetryMaxAgeMinutes()} phút`,
+        `Telemetry không còn mới (đã quá thời hạn ${this.getPredictionTelemetryMaxAgeMinutes()} phút)`,
       );
     }
 
@@ -708,7 +713,11 @@ export class PredictionsService {
   }
 
   private getPredictionTelemetryMaxAgeMinutes(): number {
-    const configured = Number(this.configService.get<string>('PREDICTION_TELEMETRY_MAX_AGE_MINUTES'));
+    const configured = Number(
+      this.configService.get<string>('PREDICTION_TELEMETRY_MAX_AGE_MINUTES')
+      ?? this.configService.get<string>('DEVICE_STALE_TIMEOUT_MINUTES')
+      ?? '15',
+    );
     return Number.isFinite(configured) && configured > 0 ? configured : 15;
   }
 

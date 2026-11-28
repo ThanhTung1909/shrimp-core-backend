@@ -214,10 +214,28 @@ uvicorn.run(app, host="127.0.0.1", port=int(sys.argv[1]),
     expect(savedRecords).toHaveLength(1);
   });
 
-  it('counts rejected legacy and incomplete prediction requests', async () => {
+  it('accepts complete legacy requests and counts invalid prediction requests', async () => {
     const beforeRequests = await readPredictRequestCount();
+    const legacy = { currentDO: 5.2, currentPH: 7.8, currentTemp: 29.5, salinity: 15, turbidity: 20 };
+    const postPrediction = (payload: object) => fetch(predictUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const legacyResponse = await postPrediction(legacy);
+    expect(legacyResponse.status).toBe(200);
+    expect(await legacyResponse.json()).toMatchObject({
+      predictedDO: expect.any(Number),
+      predictedPH: expect.any(Number),
+      riskScore: expect.any(Number),
+    });
+    const duplicate = await postPrediction({ ...legacy, dissolvedOxygen: legacy.currentDO });
+    expect(duplicate.status).toBe(200);
     const payloads = [
-      { currentDO: 5.2, currentPH: 7.8, currentTemp: 29.5, salinity: 15, turbidity: 20 },
+      { ...legacy, salinity: undefined },
+      { ...legacy, turbidity: undefined },
+      { ...legacy, currentDO: '5.2' },
+      { ...legacy, dissolvedOxygen: 6.2 },
       { dissolvedOxygen: 5.2, ph: 7.8, temperature: 29.5 },
     ];
     for (const payload of payloads) {
@@ -229,6 +247,6 @@ uvicorn.run(app, host="127.0.0.1", port=int(sys.argv[1]),
       expect(response.status).toBe(422);
       expect(await response.json()).toMatchObject({ error_type: 'VALIDATION_ERROR' });
     }
-    expect(await readPredictRequestCount()).toBe(beforeRequests + payloads.length);
+    expect(await readPredictRequestCount()).toBe(beforeRequests + payloads.length + 2);
   });
 });
