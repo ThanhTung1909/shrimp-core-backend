@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { PredictionsService } from './predictions.service.js';
 import { AiPredictionHttpClient } from './clients/ai-prediction-http.client.js';
@@ -37,6 +37,9 @@ describe('PredictionsService', () => {
     mockConfigService = {
       get: vi.fn((key) => {
         if (key === 'AI_PREDICTION_API_URL') return 'http://ai-service:8000/predict';
+        if (key === 'AI_PREDICTION_CONTRACT_VERSION') return 'ai-develop-v1';
+        if (key === 'AI_PRODUCTION_INFERENCE_APPROVED') return 'true';
+        if (key === 'PREDICTION_TELEMETRY_MAX_AGE_MINUTES') return '15';
         return null;
       }),
     };
@@ -48,6 +51,7 @@ describe('PredictionsService', () => {
         temperature: 28.5,
         salinity: 15,
         turbidity: 20,
+        recordedAt: new Date(Date.now() - 60_000),
       }),
     };
     mockPondsService = {
@@ -102,12 +106,15 @@ describe('PredictionsService', () => {
     const requestBody = JSON.parse((global.fetch as any).mock.calls[0][1].body);
     expect(requestBody).toMatchObject({
       pondId,
-      currentDO: 5.2,
-      currentPH: 7.7,
-      currentTemp: 28.5,
+      dissolvedOxygen: 5.2,
+      ph: 7.7,
+      temperature: 28.5,
       salinity: 15,
       turbidity: 20,
     });
+    expect(requestBody).not.toHaveProperty('currentDO');
+    expect(requestBody).not.toHaveProperty('currentPH');
+    expect(requestBody).not.toHaveProperty('currentTemp');
     expect(requestBody.timestamp).toMatch(/Z$/u);
     expect(result.isFallback).toBe(false);
     expect(result.predictionSource).toBe('AI_MICROSERVICE');
@@ -163,12 +170,51 @@ describe('PredictionsService', () => {
   });
 
   it.each([
-    ['missing salinity', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, turbidity: 20 }],
-    ['missing turbidity', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, salinity: 15 }],
-    ['invalid salinity', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, salinity: Number.NaN, turbidity: 20 }],
-    ['out-of-range temperature', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 60, salinity: 15, turbidity: 20 }],
-  ])('does not cause FastAPI 422 for %s; it selects controlled fallback before HTTP', async (_scenario, telemetry) => {
+    ['missing salinity', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, turbidity: 20, recordedAt: new Date(Date.now() - 60_000) }],
+    ['missing turbidity', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, salinity: 15, recordedAt: new Date(Date.now() - 60_000) }],
+    ['invalid salinity', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, salinity: Number.NaN, turbidity: 20, recordedAt: new Date(Date.now() - 60_000) }],
+    ['out-of-range temperature', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 60, salinity: 15, turbidity: 20, recordedAt: new Date(Date.now() - 60_000) }],
+  ])('rejects %s without HTTP request or persistence', async (_scenario, telemetry) => {
     mockTelemetryService.getLatestByDeviceId.mockResolvedValueOnce(telemetry);
+    global.fetch = vi.fn();
+
+    await expect(service.predictForPond(pondId)).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(mockPredictionRepo.create).not.toHaveBeenCalled();
+    expect(mockPredictionRepo.save).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing telemetry', undefined, 'PREDICTION_TELEMETRY_MISSING'],
+    ['missing recordedAt', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, salinity: 15, turbidity: 20 }, 'PREDICTION_TELEMETRY_INVALID'],
+    ['malformed recordedAt', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, salinity: 15, turbidity: 20, recordedAt: 'not-a-date' }, 'PREDICTION_TELEMETRY_INVALID'],
+    ['future telemetry', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, salinity: 15, turbidity: 20, recordedAt: new Date(Date.now() + 60_000) }, 'PREDICTION_TELEMETRY_FUTURE'],
+    ['stale telemetry', { dissolvedOxygen: 5.2, ph: 7.7, temperature: 28.5, salinity: 15, turbidity: 20, recordedAt: new Date(Date.now() - 16 * 60_000) }, 'PREDICTION_TELEMETRY_STALE'],
+  ])('returns a structured no-persistence error for %s', async (_scenario, telemetry, errorCode) => {
+    mockTelemetryService.getLatestByDeviceId.mockResolvedValueOnce(telemetry);
+    global.fetch = vi.fn();
+
+    try {
+      await service.predictForPond(pondId);
+      throw new Error('expected prediction to reject');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ServiceUnavailableException);
+      expect((error as ServiceUnavailableException).getResponse()).toMatchObject({ errorCode });
+    }
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(mockPredictionRepo.create).not.toHaveBeenCalled();
+    expect(mockPredictionRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('uses HEURISTIC_RULE only with valid telemetry when production AI approval is pending', async () => {
+    mockConfigService.get.mockImplementation((key: string) => {
+      if (key === 'AI_PREDICTION_API_URL') return 'http://ai-service:8000/predict';
+      if (key === 'AI_PREDICTION_CONTRACT_VERSION') return 'ai-develop-v1';
+      if (key === 'AI_PRODUCTION_INFERENCE_APPROVED') return 'false';
+      if (key === 'PREDICTION_TELEMETRY_MAX_AGE_MINUTES') return '15';
+      return null;
+    });
     global.fetch = vi.fn();
 
     const result = await service.predictForPond(pondId);
@@ -195,6 +241,7 @@ describe('PredictionsService', () => {
       ],
     });
     mockTelemetryService.getLatestByDeviceId.mockResolvedValueOnce({
+      recordedAt: new Date(),
       dissolvedOxygen: 5.2,
       ph: 7.7,
       temperature: 28.5,

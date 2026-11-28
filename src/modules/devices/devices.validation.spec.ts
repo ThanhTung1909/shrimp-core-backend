@@ -5,6 +5,7 @@ import { plainToInstance } from 'class-transformer';
 import { CreateDeviceDto } from './dto/create-device.dto.js';
 import { UpdateDeviceDto } from './dto/update-device.dto.js';
 import { FindDevicesQueryDto } from './dto/find-devices-query.dto.js';
+import { AssignPondDto } from './dto/assign-pond.dto.js';
 
 describe('Devices Validation Suite', () => {
   describe('ParseUUIDPipe Validation (:id)', () => {
@@ -124,6 +125,58 @@ describe('Devices Validation Suite', () => {
       const limitError = errors.find((e) => e.property === 'limit');
       expect(limitError).toBeDefined();
       expect(limitError?.constraints).toHaveProperty('min');
+    });
+  });
+
+  describe('Pond UUID contracts', () => {
+    const validV4PondId = '550e8400-e29b-41d4-a716-446655440000';
+    const validV1PondId = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+    const invalidSeedPondId = '22222222-2222-2222-2222-222222222203';
+
+    it('accepts a UUID v4 pondId for the /devices query and v4-only device assignment DTOs', async () => {
+      const queryErrors = await validate(
+        plainToInstance(FindDevicesQueryDto, { pondId: validV4PondId }),
+      );
+      const createErrors = await validate(
+        plainToInstance(CreateDeviceDto, {
+          deviceName: 'Cảm biến DO Ao 1',
+          macAddress: 'AA:BB:CC:DD:EE:FF',
+          pondId: validV4PondId,
+        }),
+      );
+      const assignErrors = await validate(
+        plainToInstance(AssignPondDto, { pondId: validV4PondId }),
+      );
+
+      expect(queryErrors.filter((error) => error.property === 'pondId')).toHaveLength(0);
+      expect(createErrors.filter((error) => error.property === 'pondId')).toHaveLength(0);
+      expect(assignErrors.filter((error) => error.property === 'pondId')).toHaveLength(0);
+    });
+
+    it('keeps the version-unspecified /devices query distinct from v4-only payload DTOs', async () => {
+      const queryErrors = await validate(
+        plainToInstance(FindDevicesQueryDto, { pondId: validV1PondId }),
+      );
+      const createErrors = await validate(
+        plainToInstance(CreateDeviceDto, {
+          deviceName: 'Cảm biến DO Ao 1',
+          macAddress: 'AA:BB:CC:DD:EE:FF',
+          pondId: validV1PondId,
+        }),
+      );
+
+      expect(queryErrors.filter((error) => error.property === 'pondId')).toHaveLength(0);
+      expect(createErrors.find((error) => error.property === 'pondId')).toBeDefined();
+    });
+
+    it('rejects the malformed seed pondId before the /devices query reaches the service', async () => {
+      const errors = await validate(
+        plainToInstance(FindDevicesQueryDto, { pondId: invalidSeedPondId }),
+      );
+      const pondIdError = errors.find((error) => error.property === 'pondId');
+
+      expect(pondIdError).toBeDefined();
+      expect(pondIdError?.constraints).toHaveProperty('isUuid');
     });
   });
 });
