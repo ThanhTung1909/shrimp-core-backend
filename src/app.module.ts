@@ -17,6 +17,7 @@ import { QueueModule } from './common/queues/queue.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { FarmsModule } from './modules/farms/farms.module.js';
 import { CropsModule } from './modules/crops/crops.module.js';
+import { AiRiskAlertsModule } from './modules/ai-risk-alerts/ai-risk-alerts.module.js';
 
 import { ScheduleModule } from '@nestjs/schedule';
 import { EsmsModule } from './common/esms/esms.module.js';
@@ -76,6 +77,7 @@ const httpOnlyMode = isHttpOnlyMode();
     CropsModule,
     DevicesModule,
     AlertsModule,
+    AiRiskAlertsModule,
     PredictionsModule,
 
     // Module quản lý dữ liệu cảm biến chuỗi thời gian

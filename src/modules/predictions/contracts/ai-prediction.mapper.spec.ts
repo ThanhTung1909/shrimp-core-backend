@@ -120,6 +120,38 @@ describe('AI prediction contract mapper', () => {
       });
     });
 
+    it('filters out-of-contract recentHistory sensor glitch values while preserving valid metrics', () => {
+      const result = buildWaterQualityForecastRequest({
+        ...validWqRequest,
+        recentHistory: [
+          {
+            recordedAt: '2026-11-22T01:00:00.000Z',
+            dissolvedOxygen: 5.4,
+            ph: 3.98,
+            temperature: 28.6,
+          },
+          {
+            recordedAt: '2026-11-22T01:05:00.000Z',
+            ph: 13.5,
+            temperature: 55,
+          },
+        ],
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        value: {
+          recentHistory: [
+            {
+              recordedAt: '2026-11-22T01:00:00.000Z',
+              dissolvedOxygen: 5.4,
+              temperature: 28.6,
+            },
+          ],
+        },
+      });
+    });
+
     it.each([
       ['invalid pondId', { ...validWqRequest, pondId: 'not-uuid' }],
       ['horizonHours < 12', { ...validWqRequest, horizonHours: 11 }],

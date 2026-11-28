@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { validate } from 'class-validator';
 import { AlertLevel } from '../../common/enums/alert-level.enum.js';
 import { AlertStatus } from '../../common/enums/alert-status.enum.js';
 import { Role } from '../../common/enums/role.enum.js';
 import { AlertsService } from './alerts.service.js';
+import { QueryAlertDto } from './dto/query-alert.dto.js';
 
 describe('AlertsService', () => {
   let service: AlertsService;
@@ -169,6 +171,86 @@ describe('AlertsService', () => {
       expect(queryBuilder.andWhere).toHaveBeenCalledWith(
         'alert.pond_id = :pondId',
         { pondId: 'foreign-pond' },
+      );
+    });
+
+    it('applies pondId, startDate, and inclusive date-only endDate filters', async () => {
+      const pondId = '11111111-1111-4111-8111-111111111111';
+
+      await service.findAll(
+        {
+          pondId,
+          startDate: '2026-11-01',
+          endDate: '2026-11-25',
+        },
+        'admin-1',
+        Role.ADMIN,
+      );
+
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        'alert.pond_id = :pondId',
+        { pondId },
+      );
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        'alert.createdAt >= :startDate',
+        { startDate: new Date('2026-11-01') },
+      );
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        'alert.createdAt <= :endDate',
+        { endDate: new Date('2026-11-25T23:59:59.999Z') },
+      );
+    });
+
+    it('uses exact Date instance when endDate includes a full ISO timestamp', async () => {
+      const isoEndDate = '2026-11-25T10:30:00.000Z';
+
+      await service.findAll(
+        { endDate: isoEndDate },
+        'admin-1',
+        Role.ADMIN,
+      );
+
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        'alert.createdAt <= :endDate',
+        { endDate: new Date(isoEndDate) },
+      );
+    });
+  });
+
+  describe('QueryAlertDto validation', () => {
+    it('accepts valid pondId, startDate, and endDate', async () => {
+      const dto = Object.assign(new QueryAlertDto(), {
+        pondId: '11111111-1111-4111-8111-111111111111',
+        startDate: '2026-11-01',
+        endDate: '2026-11-25T23:59:59.999Z',
+      });
+
+      await expect(validate(dto)).resolves.toHaveLength(0);
+    });
+
+    it('accepts seeded canonical UUIDs without RFC-4122 version bits', async () => {
+      const dto = Object.assign(new QueryAlertDto(), {
+        pondId: '22222222-2222-2222-2222-222222222201',
+        deviceId: '33333333-3333-4333-a333-333333333301',
+      });
+
+      await expect(validate(dto)).resolves.toHaveLength(0);
+    });
+
+    it('rejects invalid pondId, startDate, and endDate', async () => {
+      const dto = Object.assign(new QueryAlertDto(), {
+        pondId: 'invalid-uuid',
+        startDate: 'not-a-date',
+        endDate: 'still-not-a-date',
+      });
+
+      const errors = await validate(dto);
+      expect(errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ property: 'pondId' }),
+          expect.objectContaining({ property: 'startDate' }),
+          expect.objectContaining({ property: 'endDate' }),
+        ]),
       );
     });
   });

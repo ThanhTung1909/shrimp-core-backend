@@ -779,6 +779,7 @@ describe('SECURITY AUDIT VERIFICATION SUITE', () => {
         'manager-id',
         Role.MANAGER,
       );
+
       expect(usersService.assertManagerCanManageUser).toHaveBeenCalledWith(
         'manager-id',
         scopedUser,

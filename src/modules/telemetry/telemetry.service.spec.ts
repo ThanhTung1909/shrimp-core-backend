@@ -71,7 +71,7 @@ describe('TelemetryService', () => {
   });
 
   describe('assertDeviceReadAccess', () => {
-    it('delegates human access to the established pond policy before telemetry reads', async () => {
+    it('delegates human access to the existing pond scope policy before telemetry reads', async () => {
       mockDeviceRepo.findOne.mockResolvedValue({ deviceId: 'device-1', pondId: 'pond-1' });
 
       await service.assertDeviceReadAccess('device-1', 'farmer-1', Role.FARMER);
@@ -88,7 +88,7 @@ describe('TelemetryService', () => {
       expect(mockPondsService.findPondById).not.toHaveBeenCalled();
     });
 
-    it('propagates a cross-pond denial from PondsService', async () => {
+    it('does not weaken a cross-pond denial from PondsService', async () => {
       mockDeviceRepo.findOne.mockResolvedValue({ deviceId: 'foreign-device', pondId: 'pond-b' });
       mockPondsService.findPondById.mockRejectedValueOnce(new ForbiddenException());
 
